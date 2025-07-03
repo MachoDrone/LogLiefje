@@ -16,6 +16,17 @@ RED='\033[1;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# ------------- TEMP FILES AND CLEANUP -------------
+RAW_LOG_FILE="last100000.log"
+NUMBERED_LOG_FILE="last100000_numbered.log"
+FILTERED_LOG_FILE="last24h.log"
+TMP_UPLOAD_LOG="/tmp/0x0_upload.log"
+
+cleanup() {
+    rm -f "$RAW_LOG_FILE" "$NUMBERED_LOG_FILE" "$FILTERED_LOG_FILE" "$TMP_UPLOAD_LOG"
+}
+trap cleanup EXIT INT TERM
+
 # ------------- USAGE FUNCTION -------------
 print_help() {
 cat << EOF
@@ -204,10 +215,6 @@ mana="${manaz}${mana25}${manaz}${mana2}${mana27}${manaf}7954103${mana27}91527855
 hqsap_i_url=$'\x68\x74\x74\x70\x73\x3a\x2f\x2f\x73\x6c\x61\x63\x6b\x2e\x63\x6f\x6d\x2f\x61\x70\x69\x2f\x63\x68\x61\x74\x2e\x70\x6f\x73\x74\x4d\x65\x73\x73\x61\x67\x65'
 
 # ------------- CAPTURE LAST 24H DOCKER LOGS WITH LIVE LINE COUNTER -------------
-RAW_LOG_FILE="last100000.log"
-NUMBERED_LOG_FILE="last100000_numbered.log"
-FILTERED_LOG_FILE="last24h.log"
-
 echo "Extracting logs with live line counter..."
 docker logs -t --tail 100000 nosana-node | \
 awk '{print NR, $0; if (NR % 1000 == 0) { printf("\rLines processed: %d", NR) > "/dev/stderr" }} END { print "" > "/dev/stderr" }' > "$RAW_LOG_FILE"
@@ -233,12 +240,11 @@ LOG_FILE_PATH="$FILTERED_LOG_FILE"
 # ------------- UPLOAD TO 0x0.st WITH PROGRESS BAR -------------
 echo "Uploading file size: $(du -h "$LOG_FILE_PATH" | cut -f1)"
 echo "Uploading $LOG_FILE_PATH to 0x0.st..."
-UPLOAD_RESPONSE=$(curl -# -F "file=@$LOG_FILE_PATH" https://0x0.st 2>&1 | tee /tmp/0x0_upload.log)
-UPLOAD_URL=$(tail -n 10 /tmp/0x0_upload.log | grep -Eo 'https://0x0.st/[A-Za-z0-9._-]+' | tail -n1)
+UPLOAD_RESPONSE=$(curl -# -F "file=@$LOG_FILE_PATH" https://0x0.st 2>&1 | tee "$TMP_UPLOAD_LOG")
+UPLOAD_URL=$(tail -n 10 "$TMP_UPLOAD_LOG" | grep -Eo 'https://0x0.st/[A-Za-z0-9._-]+' | tail -n1)
 
 if [[ -z "$UPLOAD_URL" ]]; then
     echo -e "${RED}Failed to upload file to 0x0.st${NC}"
-    rm -f "$RAW_LOG_FILE" "$NUMBERED_LOG_FILE" "$FILTERED_LOG_FILE" /tmp/0x0_upload.log
     exit 1
 fi
 echo "File uploaded to: $UPLOAD_URL"
@@ -272,6 +278,3 @@ else
     echo -e "${RED}Failed to post message to HQs.${NC}"
     echo "$HQs_RESPONSE"
 fi
-
-# ------------- CLEANUP -------------
-rm -f "$RAW_LOG_FILE" "$NUMBERED_LOG_FILE" "$FILTERED_LOG_FILE" /tmp/0x0_upload.log
