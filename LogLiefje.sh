@@ -141,23 +141,24 @@ if [[ $ENABLE_CONFIG -eq 1 ]]; then
 fi
 
 # ------------- CHECK REQUIRED VARIABLES -------------
-if [[ -z "$USER_ID" ]]; then
-    echo -e "******************************************************"
-    echo -e "${RED}ERROR: HQs user ID not provided!${NC}"
-    echo -e "Use -u <HQsUserID> or enable config with -e."
-    echo -e "******************************************************"
-    exit 1
-fi
-
 if [[ -z "$CHANNEL_ID" ]]; then
-    # Default to DM if not provided
-    CHANNEL_ID="$USER_ID"
+    if [[ -n "$USER_ID" ]]; then
+        CHANNEL_ID="$USER_ID"
+    else
+        echo -e "******************************************************"
+        echo -e "${RED}ERROR: HQs channel ID or user ID not provided!${NC}"
+        echo -e "Use -c <ChannelID> or -u <HQsUserID> or enable config with -e."
+        echo -e "******************************************************"
+        exit 1
+    fi
 fi
 
 # ------------- PRINT SUMMARY -------------
 echo -e "******************************************************"
 echo -e "Notification will be sent to:"
-echo -e "  HQs user: <@$USER_ID>"
+if [[ -n "$USER_ID" ]]; then
+    echo -e "  HQs user: <@$USER_ID>"
+fi
 if [[ "$CHANNEL_ID" == "$USER_ID" ]]; then
     echo -e "  Channel/DM: Direct Message"
 else
@@ -242,7 +243,13 @@ echo "File uploaded to: $UPLOAD_URL"
 
 # ------------- POST TO HQs -------------
 BASENAME=$(basename "$UPLOAD_URL")
-HQs_MSG="<@$USER_ID> *<${UPLOAD_URL}|    View Log    >* ${UPLOAD_URL}
+if [[ -n "$USER_ID" ]]; then
+    HQS_MENTION="<@$USER_ID> "
+else
+    HQS_MENTION=""
+fi
+
+HQs_MSG="${HQS_MENTION}*<${UPLOAD_URL}|    View Log    >* ${UPLOAD_URL}
 Linux/macOS   right-click to copy all
 \`\`\`wget $UPLOAD_URL && nano $BASENAME\`\`\`
 Windows PowerShell   right-click to copy all
