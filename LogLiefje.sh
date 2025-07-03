@@ -22,7 +22,7 @@ $APP_NAME - HQs Log Notification Script
 Usage: $0 [options]
 
 Options:
-  -u, --user <HQsUserID>      HQs user ID to notify (e.g., U06QUUFGG4B)
+  -u, --user <HQsUserID>      HQs user ID to notify (e.g., U06QUUFGGA8)
   -c, --channel <ChannelID>   HQs channel ID or user ID for DM (default: DM to user)
   -e, --EnableConfig          Enable config file usage (create/read/update ~/.config/logliefje/config.txt)
   -D, --DeleteConfigFile      Delete the config file and exit
@@ -30,10 +30,10 @@ Options:
   -h, --help                  Show this help message and exit
 
 Examples:
-  $0 -u U06QUUFGG4B -c C093HNDQ422
-  $0 -e -u U06QUUFGG4B
+  $0 -u U06QUUFGGA8 -c C093HNDQ4Zz
+  $0 -e -u U06QUUFGGA8
   $0 -D
-  $0 --profile alice -e -u U06QUUFGG4B
+  $0 --profile alice -e -u U06QUUFGGA8
 
 EOF
 }
