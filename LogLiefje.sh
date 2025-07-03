@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje.sh) -u U08NWH5GGB0 -c C093HNDQ422
+
 # LogLiefje - HQs Log Notification Script
 
 # ------------- CONFIGURABLE VARIABLES -------------
