@@ -19,7 +19,7 @@ NC='\033[0m' # No Color
 # ------------- TEMP FILES AND CLEANUP -------------
 RAW_LOG_FILE="last100000.log"
 NUMBERED_LOG_FILE="last100000_numbered.log"
-FILTERED_LOG_FILE="last24h.log"
+FILTERED_LOG_FILE="lastNhours.log"
 TMP_UPLOAD_LOG="/tmp/0x0_upload.log"
 
 cleanup() {
@@ -40,13 +40,15 @@ Options:
   -e, --EnableConfig          Enable config file usage (create/read/update ~/.config/logliefje/config.txt)
   -D, --DeleteConfigFile      Delete the config file and exit
   --profile <name>            Use a profile-specific config file (e.g., config.<name>.txt)
-  -h, --help                  Show this help message and exit
+  -h, --hours <N>             Number of hours to go back in logs (1-24, default: 24)
+  --help                      Show this help message and exit
 
 Examples:
   $0 -u U06QUUFGGA8 -c C093HNDQ4Zz
   $0 -e -u U06QUUFGGA8
   $0 -D
   $0 --profile alice -e -u U06QUUFGGA8
+  $0 -h 6
 
 EOF
 }
@@ -57,6 +59,7 @@ CHANNEL_ID=""
 ENABLE_CONFIG=0
 DELETE_CONFIG=0
 PROFILE=""
+HOURS=24
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -u|--user)
@@ -81,7 +84,11 @@ while [[ $# -gt 0 ]]; do
             LOG_FILE="$CONFIG_DIR/notify.$PROFILE.log"
             shift 2
             ;;
-        -h|--help)
+        -h|--hours)
+            HOURS="$2"
+            shift 2
+            ;;
+        --help)
             print_help
             exit 0
             ;;
@@ -92,6 +99,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ------------- VALIDATE HOURS -------------
+if ! [[ "$HOURS" =~ ^[0-9]+$ ]] || (( HOURS < 1 || HOURS > 24 )); then
+    echo -e "${RED}Invalid value for --hours: $HOURS. Must be an integer between 1 and 24.${NC}"
+    exit 1
+fi
 
 # ------------- CONFIG FILE DELETE -------------
 if [[ $DELETE_CONFIG -eq 1 ]]; then
@@ -177,6 +190,7 @@ if [[ "$CHANNEL_ID" == "$USER_ID" ]]; then
 else
     echo -e "  Channel/DM: $CHANNEL_ID"
 fi
+echo -e "  Log window: last $HOURS hour(s)"
 echo -e "******************************************************"
 
 # ------------- SECURITY: CONFIG FILE PERMISSIONS -------------
@@ -214,7 +228,7 @@ mana="${manaz}${mana25}${manaz}${mana2}${mana27}${manaf}7954103${mana27}91527855
 # hqs endpoint
 hqsap_i_url=$'\x68\x74\x74\x70\x73\x3a\x2f\x2f\x73\x6c\x61\x63\x6b\x2e\x63\x6f\x6d\x2f\x61\x70\x69\x2f\x63\x68\x61\x74\x2e\x70\x6f\x73\x74\x4d\x65\x73\x73\x61\x67\x65'
 
-# ------------- CAPTURE LAST 24H DOCKER LOGS WITH LIVE LINE COUNTER -------------
+# ------------- CAPTURE LAST N HOURS DOCKER LOGS WITH LIVE LINE COUNTER -------------
 echo "Extracting logs with live line counter..."
 docker logs -t --tail 100000 nosana-node | \
 awk '{print NR, $0; if (NR % 1000 == 0) { printf("\rLines processed: %d", NR) > "/dev/stderr" }} END { print "" > "/dev/stderr" }' > "$RAW_LOG_FILE"
@@ -222,7 +236,7 @@ awk '{print NR, $0; if (NR % 1000 == 0) { printf("\rLines processed: %d", NR) > 
 total=$(wc -l < "$RAW_LOG_FILE")
 awk -v n="$total" '{print n--, $0}' "$RAW_LOG_FILE" > "$NUMBERED_LOG_FILE"
 
-since=$(date -u --date="24 hours ago" +"%Y-%m-%dT%H:%M:%S")
+since=$(date -u --date="$HOURS hours ago" +"%Y-%m-%dT%H:%M:%S")
 
 echo "Example line from numbered log:"
 head -n 1 "$NUMBERED_LOG_FILE"
@@ -257,7 +271,8 @@ else
     HQS_MENTION=""
 fi
 
-HQs_MSG="${HQS_MENTION}*<${UPLOAD_URL}|    View Log    >* ${UPLOAD_URL}
+HQs_MSG="${HQS_MENTION}*<${UPLOAD_URL}|    View Log    >* (last ${HOURS} hour(s)) ${UPLOAD_URL}
+Log window: last ${HOURS} hour(s)
 Linux/macOS   right-click to copy all
 \`\`\`wget $UPLOAD_URL && nano $BASENAME\`\`\`
 Windows PowerShell   right-click to copy all
