@@ -23,7 +23,7 @@ FILTERED_LOG_FILE="lastNhours.log"
 TMP_UPLOAD_LOG="/tmp/0x0_upload.log"
 
 cleanup() {
-    #rm -f "$RAW_LOG_FILE" "$NUMBERED_LOG_FILE" "$FILTERED_LOG_FILE" "$TMP_UPLOAD_LOG"
+    ls -f "$RAW_LOG_FILE" "$NUMBERED_LOG_FILE" "$FILTERED_LOG_FILE" "$TMP_UPLOAD_LOG"
 }
 trap cleanup EXIT INT TERM
 
