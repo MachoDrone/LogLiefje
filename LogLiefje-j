@@ -388,7 +388,7 @@ fi
 HQs_MSG="${HQS_MENTION}*<${UPLOAD_URL}|    View Log    >* (last ${HOURS} hour(s)) ${UPLOAD_URL}
 Log window: last ${HOURS} hour(s)
 Linux/macOS   right-click to copy all
-\`\`\`wget $UPLOAD_URL && nano $BASENAME\`\`\`
+\`\`\`wget $UPLOAD_URL && cat $BASENAME\`\`\`
 Windows PowerShell   right-click to copy all
 \`\`\`Invoke-WebRequest $UPLOAD_URL -OutFile $BASENAME; & \\\"C:\\Program Files\\Notepad++\\notepad++.exe\\\" $BASENAME\`\`\`"
 
