@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v0.00.13"   # ← incremented
+echo "v0.00.14"   # ← incremented
 sleep 3
 
 # ================================================
@@ -60,7 +60,7 @@ fi
 LENGTH=$(wc -c < "$TEXT_FILE")
 echo "File size: $LENGTH bytes"
 
-# Step 1: Get upload URL + tell Slack it's a text file
+# Step 1: Get upload URL from Slack
 GET_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -F "filename=$(basename "$TEXT_FILE")" \
@@ -79,27 +79,32 @@ fi
 
 echo "Got upload_url and file_id"
 
-# Step 2: Upload with explicit text/plain type
-curl -s -H "Content-Type: text/plain" -T "$TEXT_FILE" "$UPLOAD_URL_SLACK" > /dev/null
+# Step 2: Upload file content to the pre-signed URL
+curl -s -X POST \
+  -F "file=@$TEXT_FILE" \
+  "$UPLOAD_URL_SLACK" > /dev/null
 
-# Step 3: Complete upload (no channel needed)
+# Step 3: Complete upload AND share to channel
+# NOTE: channel_id is REQUIRED here so the file is shared/accessible.
+# Without it the permalink opens a blank page because nobody has access.
+# initial_comment posts the notification text alongside the file attachment.
+echo "Completing upload and sharing to channel..."
 COMPLETE_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -H "Content-type: application/json; charset=utf-8" \
-  --data "{\"files\":[{\"id\":\"$FILE_ID\",\"title\":\"$(basename "$TEXT_FILE")\"}]}" \
+  --data "{
+    \"files\": [{\"id\":\"$FILE_ID\",\"title\":\"$(basename "$TEXT_FILE")\"}],
+    \"channel_id\": \"$CHANNEL_ID\",
+    \"initial_comment\": \"<@${USER_ID}> New log uploaded\n\nLitterbox (72h): ${UPLOAD_URL}\"
+  }" \
   https://slack.com/api/files.completeUploadExternal)
+
+echo "Complete response:"
+echo "$COMPLETE_RESPONSE" | jq .
 
 SLACK_PERMALINK=$(echo "$COMPLETE_RESPONSE" | jq -r '.files[0].permalink // "not_found"')
 
-# Post notification
-echo "Posting notification message..."
-MESSAGE_RESPONSE=$(curl -s -X POST \
-  -H "Authorization: Bearer $mana" \
-  -H "Content-type: application/json; charset=utf-8" \
-  --data "{\"channel\":\"$CHANNEL_ID\",\"text\":\"<@${USER_ID}> New log uploaded\n\nLitterbox (72h): ${UPLOAD_URL}\nSlack permanent: ${SLACK_PERMALINK}\"}" \
-  https://slack.com/api/chat.postMessage)
-
-echo "Message response:"
-echo "$MESSAGE_RESPONSE"
+echo ""
+echo "Litterbox link: $UPLOAD_URL"
 echo "Slack permanent link: $SLACK_PERMALINK"
-echo "✅ Done! Check the new message in Slack."
+echo "Done! Check the new message in Slack."
