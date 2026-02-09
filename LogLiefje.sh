@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v0.00.12"   # ← incremented
+echo "v0.00.13"   # ← incremented
 sleep 3
 
 # ================================================
@@ -50,7 +50,7 @@ if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; the
     exit 1
 fi
 
-# ------------- UPLOAD TO SLACK (permanent, no sharing step) -------------
+# ------------- UPLOAD TO SLACK (permanent) -------------
 echo "Uploading to Slack (permanent attachment)..."
 
 if [[ ! -f "$TEXT_FILE" ]]; then
@@ -60,11 +60,12 @@ fi
 LENGTH=$(wc -c < "$TEXT_FILE")
 echo "File size: $LENGTH bytes"
 
-# Step 1: Get upload URL
+# Step 1: Get upload URL + tell Slack it's a text file
 GET_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -F "filename=$(basename "$TEXT_FILE")" \
   -F "length=$LENGTH" \
+  -F "snippet_type=text" \
   https://slack.com/api/files.getUploadURLExternal)
 
 UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url // empty')
@@ -78,35 +79,27 @@ fi
 
 echo "Got upload_url and file_id"
 
-# Step 2: Upload the file
-curl -s -T "$TEXT_FILE" "$UPLOAD_URL_SLACK" > /dev/null
+# Step 2: Upload with explicit text/plain type
+curl -s -H "Content-Type: text/plain" -T "$TEXT_FILE" "$UPLOAD_URL_SLACK" > /dev/null
 
-# Step 3: Complete upload WITHOUT channel (file stays permanent but private to workspace)
+# Step 3: Complete upload (no channel needed)
 COMPLETE_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -H "Content-type: application/json; charset=utf-8" \
   --data "{\"files\":[{\"id\":\"$FILE_ID\",\"title\":\"$(basename "$TEXT_FILE")\"}]}" \
   https://slack.com/api/files.completeUploadExternal)
 
-echo "=== Slack file response ==="
-echo "$COMPLETE_RESPONSE"
+SLACK_PERMALINK=$(echo "$COMPLETE_RESPONSE" | jq -r '.files[0].permalink // "not_found"')
 
-# Extract Slack permanent link
-SLACK_PERMALINK=$(echo "$COMPLETE_RESPONSE" | jq -r '.files[0].permalink // .files[0].url_private // "not_found"')
-
-# Post notification message
+# Post notification
 echo "Posting notification message..."
 MESSAGE_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -H "Content-type: application/json; charset=utf-8" \
-  --data "{\"channel\":\"$CHANNEL_ID\",\"text\":\"<@${USER_ID}> New log uploaded\\nLitterbox (72h): ${UPLOAD_URL}\\nSlack permanent: ${SLACK_PERMALINK}\"}" \
+  --data "{\"channel\":\"$CHANNEL_ID\",\"text\":\"<@${USER_ID}> New log uploaded\n\nLitterbox (72h): ${UPLOAD_URL}\nSlack permanent: ${SLACK_PERMALINK}\"}" \
   https://slack.com/api/chat.postMessage)
 
 echo "Message response:"
 echo "$MESSAGE_RESPONSE"
-
-if echo "$MESSAGE_RESPONSE" | grep -q '"ok":true'; then
-    echo "✅ Done! File is permanently in Slack + notification sent."
-else
-    echo "❌ Message posting failed"
-fi
+echo "Slack permanent link: $SLACK_PERMALINK"
+echo "✅ Done! Check the new message in Slack."
