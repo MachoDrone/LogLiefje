@@ -180,8 +180,8 @@ else
 fi
 #--- END NVIDIA SMI ---
 #--- BEGIN DOCKER COMMANDS ---
-docker ps>> mylog.txt
-docker exec podman podman ps>> mylog.txt
+echo " " && docker ps>> mylog.txt
+echo " " && docker exec podman podman ps>> mylog.txt
 #--- END DOCKER COMMANDS ---
 
 
