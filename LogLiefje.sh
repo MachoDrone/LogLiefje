@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.18"   # ← incremented
+echo "v0.00.19"   # ← incremented
 echo > mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -153,13 +153,18 @@ else
     echo "ERROR: nvidia-smi not found in PATH" >> mylog.txt
 fi
 #--- END NVIDIA SMI ---
+#--- BEGIN DOCKER COMMANDS ---
+docker ps> mylog.txt
+docker exec podman podman ps> mylog.txt
+#--- END DOCKER COMMANDS ---
 
-TEXT_FILE="mylog.txt"   # ← must exist
+
+
 
 # ================================================
 # === DO NOT EDIT BELOW THIS LINE ================
 # ================================================
-
+TEXT_FILE="mylog.txt"   # ← must exist
 # ------------- DISCORD NAME PROMPT -------------
 SAVED_NAME=""
 if [[ -f "$CONFIG_FILE" ]]; then
