@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v0.00.6"   # increment number for each edit
+echo "v0.00.7"   # increment number for each edit
 sleep 3          # so the version can be seen quickly during tests
 
 # ================================================
@@ -38,7 +38,7 @@ manaf=$'\x36'
 
 mana="${manaz}${mana25}${manaz}${mana2}${mana27}${manaf}7954103${mana27}9152785550736${mana27}IphNeLHjAeeLoe4stIaoTcxj"
 
-# ------------- UPLOAD TO LITTERBOX (temporary view link) -------------
+# ------------- UPLOAD TO LITTERBOX -------------
 echo "Uploading to Litterbox (${EXPIRATION})..."
 UPLOAD_URL=$(curl -s -F "reqtype=fileupload" \
                    -F "time=$EXPIRATION" \
@@ -52,7 +52,7 @@ if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; the
     exit 1
 fi
 
-# ------------- UPLOAD TO SLACK AS PERMANENT ATTACHMENT -------------
+# ------------- TRY TO UPLOAD TO SLACK AS PERMANENT ATTACHMENT -------------
 echo "Uploading file to Slack as permanent attachment..."
 INITIAL_COMMENT="<@${USER_ID}> New log uploaded:  <${UPLOAD_URL}|View Log> <-Download Now! link expires in 72 hours>"
 
@@ -67,6 +67,24 @@ SLACK_RESPONSE=$(curl -s -F file=@"$TEXT_FILE" \
 if echo "$SLACK_RESPONSE" | grep -q '"ok":true'; then
     echo "✅ File uploaded to Slack as permanent attachment!"
 else
-    echo "❌ Slack file upload failed"
-    echo "$SLACK_RESPONSE"
+    echo "⚠️  Slack file upload failed (falling back to normal message)"
+    echo "Debug response: $SLACK_RESPONSE"
+    
+    # Fallback: post normal message with link
+    MESSAGE="New log uploaded:  <${UPLOAD_URL}|View Log> <-Download Now! link expires in 72 hours>"
+    TEXT="<@${USER_ID}> ${MESSAGE}"
+    POST_DATA=$(jq -n --arg channel "$CHANNEL_ID" --arg text "$TEXT" '{channel: $channel, text: $text}')
+    
+    RESPONSE=$(curl -s -X POST \
+        -H "Authorization: Bearer $mana" \
+        -H "Content-type: application/json" \
+        --data "$POST_DATA" \
+        https://slack.com/api/chat.postMessage)
+    
+    if echo "$RESPONSE" | grep -q '"ok":true'; then
+        echo "✅ Fallback message posted successfully"
+    else
+        echo "❌ Fallback also failed"
+        echo "$RESPONSE"
+    fi
 fi
