@@ -1,6 +1,7 @@
 #!/bin/bash
-echo v0.00.1 #increment number for each edit
+echo v0.00.2 #increment number for each edit
 sleep 3 #so the version can be seen quickly during tests
+
 # ================================================
 # Upload to Litterbox + Notify Slack Template
 # ================================================
