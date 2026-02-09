@@ -1,15 +1,15 @@
 #!/bin/bash
-echo "v0.00.8"   # increment number for each edit
-sleep 3          # so the version can be seen quickly during tests
+echo "v0.00.9"   # ← incremented
+sleep 3
 
 # ================================================
 # Upload to Litterbox + Notify Slack Template
 # ================================================
 
 # ------------- CONFIG (EDIT THESE) -------------
-CHANNEL_ID="C093HNDQ422"          # Target Slack channel
-USER_ID="U08NWH5GG8O"             # User to mention
-EXPIRATION="72h"                  # Expiration time (72h max)
+CHANNEL_ID="C093HNDQ422"
+USER_ID="U08NWH5GG8O"
+EXPIRATION="72h"
 
 # ================================================
 # === YOUR CODE GOES HERE ========================
@@ -21,9 +21,8 @@ EXPIRATION="72h"                  # Expiration time (72h max)
 #   echo "Log content..." > mylog.txt
 #   cp lastNhours.log mylog.txt
 #   cat somefile.log > mylog.txt
-#   ... your own commands ...
 
-TEXT_FILE="mylog.txt"   # ← MUST be a .txt file (important for browser viewing)
+TEXT_FILE="mylog.txt"   # ← must exist
 
 # ================================================
 # === DO NOT EDIT BELOW THIS LINE ================
@@ -35,7 +34,6 @@ mana27=$'\x2D'
 mana25=$'\x6F'
 manaz=$'\x78'
 manaf=$'\x36'
-
 mana="${manaz}${mana25}${manaz}${mana2}${mana27}${manaf}7954103${mana27}9152785550736${mana27}IphNeLHjAeeLoe4stIaoTcxj"
 
 # ------------- UPLOAD TO LITTERBOX -------------
@@ -52,27 +50,37 @@ if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; the
     exit 1
 fi
 
-# ------------- UPLOAD TO SLACK (new permanent method) -------------
+# ------------- UPLOAD TO SLACK (permanent) -------------
 echo "Uploading to Slack (permanent attachment)..."
 
-# Step 1: Get upload URL
-LENGTH=$(stat -c%s "$TEXT_FILE" 2>/dev/null || stat -f%z "$TEXT_FILE" 2>/dev/null)
+# Safety check + debug
+if [[ ! -f "$TEXT_FILE" ]]; then
+    echo "Error: $TEXT_FILE not found!"
+    exit 1
+fi
+LENGTH=$(wc -c < "$TEXT_FILE")
+echo "File size: $LENGTH bytes"
+
+# Step 1: Get upload URL (using form data - this is the reliable way in bash)
 GET_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
-  -H "Content-type: application/json" \
-  --data "{\"filename\":\"$(basename "$TEXT_FILE")\",\"length\":$LENGTH}" \
+  -F "filename=$(basename "$TEXT_FILE")" \
+  -F "length=$LENGTH" \
   https://slack.com/api/files.getUploadURLExternal)
 
-UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url')
-FILE_ID=$(echo "$GET_RESPONSE" | jq -r '.file_id')
+UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url // empty')
+FILE_ID=$(echo "$GET_RESPONSE" | jq -r '.file_id // empty')
 
-if [[ "$UPLOAD_URL_SLACK" == "null" || -z "$UPLOAD_URL_SLACK" ]]; then
+if [[ -z "$UPLOAD_URL_SLACK" || -z "$FILE_ID" ]]; then
     echo "Failed to get Slack upload URL"
+    echo "Response was:"
     echo "$GET_RESPONSE"
     exit 1
 fi
 
-# Step 2: Upload the file
+echo "Got upload_url and file_id"
+
+# Step 2: PUT the file to the temporary URL
 curl -s -T "$TEXT_FILE" "$UPLOAD_URL_SLACK" > /dev/null
 
 # Step 3: Complete the upload
