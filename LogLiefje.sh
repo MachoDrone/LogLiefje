@@ -1,6 +1,6 @@
 #!/bin/bash
-echo v0.00.2 #increment number for each edit
-sleep 3 #so the version can be seen quickly during tests
+echo "v 0.00.2"   # increment number for each edit
+sleep 3          # so the version can be seen quickly during tests
 
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -54,10 +54,8 @@ if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; the
     exit 1
 fi
 
-# ------------- SEND TO SLACK (Improved layout) -------------
-MESSAGE="New log uploaded:
-
-• <${UPLOAD_URL}|View Log>     <${UPLOAD_URL}|Download log>"
+# ------------- SEND TO SLACK (Single line) -------------
+MESSAGE="New log uploaded: • <${UPLOAD_URL}|View Log>  <${UPLOAD_URL}|Download log>"
 
 TEXT="<@${USER_ID}> ${MESSAGE}"
 
