@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.20"   # ← incremented
+echo "v0.00.21"   # ← incremented
 echo > mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -180,8 +180,8 @@ else
 fi
 #--- END NVIDIA SMI ---
 #--- BEGIN DOCKER COMMANDS ---
-docker ps> mylog.txt
-docker exec podman podman ps> mylog.txt
+docker ps>> mylog.txt
+docker exec podman podman ps>> mylog.txt
 #--- END DOCKER COMMANDS ---
 
 
