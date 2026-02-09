@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v 0.00.2"   # increment number for each edit
+echo "v0.00.3"   # increment number for each edit
 sleep 3          # so the version can be seen quickly during tests
 
 # ================================================
@@ -54,8 +54,8 @@ if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; the
     exit 1
 fi
 
-# ------------- SEND TO SLACK (Single line) -------------
-MESSAGE="New log uploaded: • <${UPLOAD_URL}|View Log>  <${UPLOAD_URL}|Download log>"
+# ------------- SEND TO SLACK (Single line as requested) -------------
+MESSAGE="New log uploaded:  <${UPLOAD_URL}|View Log>  <${UPLOAD_URL}?dl=1|Download Log>"
 
 TEXT="<@${USER_ID}> ${MESSAGE}"
 
