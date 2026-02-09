@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.16"   # ← incremented
+echo "v0.00.17"   # ← incremented
 
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -73,21 +73,22 @@ fi
 
 FILE_SIZE=$(wc -c < "$TEXT_FILE" | tr -d ' ')
 
-# ------------- UPLOAD (with progress bars) -------------
-echo "Uploading ($FILE_SIZE bytes)..."
+# ------------- UPLOAD -------------
+printf "Uploading (%s bytes)... " "$FILE_SIZE"
 
-# Litterbox upload — progress bar on stderr, URL captured in stdout
-UPLOAD_URL=$(curl -# -F "reqtype=fileupload" \
+# Litterbox upload (silent)
+UPLOAD_URL=$(curl -s -F "reqtype=fileupload" \
                    -F "time=$EXPIRATION" \
                    -F "fileToUpload=@$TEXT_FILE" \
                    https://litterbox.catbox.moe/resources/internals/api.php)
 
 if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; then
-    echo "Litterbox upload failed!"
+    echo "FAILED"
+    echo "  Litterbox upload failed!"
     exit 1
 fi
 
-# Slack Step 1: Get upload URL (silent, fast API call)
+# Slack Step 1: Get upload URL
 GET_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -F "filename=$SLACK_FILENAME" \
@@ -99,12 +100,13 @@ UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url // empty')
 FILE_ID=$(echo "$GET_RESPONSE" | jq -r '.file_id // empty')
 
 if [[ -z "$UPLOAD_URL_SLACK" || -z "$FILE_ID" ]]; then
-    echo "Slack upload URL request failed!"
+    echo "FAILED"
+    echo "  Slack upload URL request failed!"
     exit 1
 fi
 
-# Slack Step 2: Upload file content — progress bar on stderr
-curl -# -X POST \
+# Slack Step 2: Upload file content (silent)
+curl -s -X POST \
   -F "file=@$TEXT_FILE" \
   "$UPLOAD_URL_SLACK" > /dev/null
 
@@ -118,12 +120,14 @@ COMPLETE_RESPONSE=$(curl -s -X POST \
   --data "{
     \"files\": [{\"id\":\"$FILE_ID\",\"title\":\"$SLACK_FILENAME\"}],
     \"channel_id\": \"$CHANNEL_ID\",
-    \"initial_comment\": \"<@${USER_ID}> (link expires in ${EXPIRATION}): ${UPLOAD_URL}  (${DISCORD_NAME_ESC})\"
+    \"initial_comment\": \"<@${USER_ID}> (link expires in ${EXPIRATION}): <${UPLOAD_URL}|${DISCORD_NAME_ESC}>\"
   }" \
   https://slack.com/api/files.completeUploadExternal)
 
 SLACK_OK=$(echo "$COMPLETE_RESPONSE" | jq -r '.ok // "false"')
 SLACK_PERMALINK=$(echo "$COMPLETE_RESPONSE" | jq -r '.files[0].permalink // empty')
+
+echo "99%"
 
 # ------------- VERIFY LINKS -------------
 printf "Verifying... "
