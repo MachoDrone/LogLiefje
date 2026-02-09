@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v0.00.10"   # ← incremented
+echo "v0.00.11"   # ← incremented
 sleep 3
 
 # ================================================
@@ -81,13 +81,13 @@ echo "Got upload_url and file_id"
 # Step 2: Upload the file
 curl -s -T "$TEXT_FILE" "$UPLOAD_URL_SLACK" > /dev/null
 
-# Step 3: Complete the upload (with title + full response logging)
+# Step 3: Complete the upload — using "channels" array (this often works when channel_id alone does not)
 INITIAL_COMMENT="<@${USER_ID}> New log uploaded:  <${UPLOAD_URL}|View Log> <-Download Now! link expires in 72 hours>"
 
 COMPLETE_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
-  -H "Content-type: application/json" \
-  --data "{\"files\":[{\"id\":\"$FILE_ID\",\"title\":\"$(basename "$TEXT_FILE")\"}],\"channel_id\":\"$CHANNEL_ID\",\"initial_comment\":\"$INITIAL_COMMENT\"}" \
+  -H "Content-type: application/json; charset=utf-8" \
+  --data "{\"files\":[{\"id\":\"$FILE_ID\",\"title\":\"$(basename "$TEXT_FILE")\"}],\"channels\":[\"$CHANNEL_ID\"],\"initial_comment\":\"$INITIAL_COMMENT\"}" \
   https://slack.com/api/files.completeUploadExternal)
 
 echo "=== Full Slack completeUploadExternal response ==="
@@ -100,11 +100,11 @@ else
     echo "❌ Slack upload failed"
 fi
 
-# =============== DEBUG TEST: Can the bot still post normal messages? ===============
+# Debug: Can the bot still post normal messages?
 echo "Testing normal chat.postMessage to the same channel..."
 TEST_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
-  -H "Content-type: application/json" \
+  -H "Content-type: application/json; charset=utf-8" \
   --data "{\"channel\":\"$CHANNEL_ID\",\"text\":\"Test message from LogLiefje script - file upload debug $(date '+%H:%M:%S')\"}" \
   https://slack.com/api/chat.postMessage)
 
