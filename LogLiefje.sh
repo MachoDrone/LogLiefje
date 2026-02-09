@@ -1,4 +1,6 @@
 #!/bin/bash
+echo v0.00.01 #increment number for each edit
+sleep 3 #so the version can be seen quickly during tests
 # ================================================
 # Upload to Litterbox + Notify Slack Template
 # ================================================
@@ -20,7 +22,7 @@ EXPIRATION="72h"                  # Expiration time (72h max)
 #   cat somefile.log > mylog.txt
 #   ... your own commands ...
 
-TEXT_FILE="tpsview.txt"   # ← MUST be a .txt file (important for browser viewing)
+TEXT_FILE="mylog.txt"   # ← MUST be a .txt file (important for browser viewing)
 
 # ================================================
 # === DO NOT EDIT BELOW THIS LINE ================
@@ -51,8 +53,10 @@ if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; the
     exit 1
 fi
 
-# ------------- SEND TO SLACK -------------
-MESSAGE="New log uploaded: <${UPLOAD_URL}|View Log>"
+# ------------- SEND TO SLACK (Improved layout) -------------
+MESSAGE="New log uploaded:
+
+• <${UPLOAD_URL}|View Log>     <${UPLOAD_URL}|Download log>"
 
 TEXT="<@${USER_ID}> ${MESSAGE}"
 
