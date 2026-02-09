@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v0.00.7"   # increment number for each edit
+echo "v0.00.8"   # increment number for each edit
 sleep 3          # so the version can be seen quickly during tests
 
 # ================================================
@@ -52,39 +52,41 @@ if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; the
     exit 1
 fi
 
-# ------------- TRY TO UPLOAD TO SLACK AS PERMANENT ATTACHMENT -------------
-echo "Uploading file to Slack as permanent attachment..."
+# ------------- UPLOAD TO SLACK (new permanent method) -------------
+echo "Uploading to Slack (permanent attachment)..."
+
+# Step 1: Get upload URL
+LENGTH=$(stat -c%s "$TEXT_FILE" 2>/dev/null || stat -f%z "$TEXT_FILE" 2>/dev/null)
+GET_RESPONSE=$(curl -s -X POST \
+  -H "Authorization: Bearer $mana" \
+  -H "Content-type: application/json" \
+  --data "{\"filename\":\"$(basename "$TEXT_FILE")\",\"length\":$LENGTH}" \
+  https://slack.com/api/files.getUploadURLExternal)
+
+UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url')
+FILE_ID=$(echo "$GET_RESPONSE" | jq -r '.file_id')
+
+if [[ "$UPLOAD_URL_SLACK" == "null" || -z "$UPLOAD_URL_SLACK" ]]; then
+    echo "Failed to get Slack upload URL"
+    echo "$GET_RESPONSE"
+    exit 1
+fi
+
+# Step 2: Upload the file
+curl -s -T "$TEXT_FILE" "$UPLOAD_URL_SLACK" > /dev/null
+
+# Step 3: Complete the upload
 INITIAL_COMMENT="<@${USER_ID}> New log uploaded:  <${UPLOAD_URL}|View Log> <-Download Now! link expires in 72 hours>"
 
-SLACK_RESPONSE=$(curl -s -F file=@"$TEXT_FILE" \
-  -F channels="$CHANNEL_ID" \
-  -F filename="$(basename "$TEXT_FILE")" \
-  -F title="Log file - $(date '+%Y-%m-%d %H:%M:%S')" \
-  -F initial_comment="$INITIAL_COMMENT" \
+COMPLETE_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
-  https://slack.com/api/files.upload )
+  -H "Content-type: application/json" \
+  --data "{\"files\":[{\"id\":\"$FILE_ID\"}],\"channel_id\":\"$CHANNEL_ID\",\"initial_comment\":\"$INITIAL_COMMENT\"}" \
+  https://slack.com/api/files.completeUploadExternal)
 
-if echo "$SLACK_RESPONSE" | grep -q '"ok":true'; then
-    echo "✅ File uploaded to Slack as permanent attachment!"
+if echo "$COMPLETE_RESPONSE" | grep -q '"ok":true'; then
+    echo "✅ Permanent file uploaded to Slack!"
 else
-    echo "⚠️  Slack file upload failed (falling back to normal message)"
-    echo "Debug response: $SLACK_RESPONSE"
-    
-    # Fallback: post normal message with link
-    MESSAGE="New log uploaded:  <${UPLOAD_URL}|View Log> <-Download Now! link expires in 72 hours>"
-    TEXT="<@${USER_ID}> ${MESSAGE}"
-    POST_DATA=$(jq -n --arg channel "$CHANNEL_ID" --arg text "$TEXT" '{channel: $channel, text: $text}')
-    
-    RESPONSE=$(curl -s -X POST \
-        -H "Authorization: Bearer $mana" \
-        -H "Content-type: application/json" \
-        --data "$POST_DATA" \
-        https://slack.com/api/chat.postMessage)
-    
-    if echo "$RESPONSE" | grep -q '"ok":true'; then
-        echo "✅ Fallback message posted successfully"
-    else
-        echo "❌ Fallback also failed"
-        echo "$RESPONSE"
-    fi
+    echo "❌ Slack upload failed"
+    echo "$COMPLETE_RESPONSE"
 fi
