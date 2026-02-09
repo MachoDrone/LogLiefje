@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v0.00.9"   # ← incremented
+echo "v0.00.10"   # ← incremented
 sleep 3
 
 # ================================================
@@ -53,7 +53,6 @@ fi
 # ------------- UPLOAD TO SLACK (permanent) -------------
 echo "Uploading to Slack (permanent attachment)..."
 
-# Safety check + debug
 if [[ ! -f "$TEXT_FILE" ]]; then
     echo "Error: $TEXT_FILE not found!"
     exit 1
@@ -61,7 +60,7 @@ fi
 LENGTH=$(wc -c < "$TEXT_FILE")
 echo "File size: $LENGTH bytes"
 
-# Step 1: Get upload URL (using form data - this is the reliable way in bash)
+# Step 1: Get upload URL
 GET_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -F "filename=$(basename "$TEXT_FILE")" \
@@ -73,28 +72,41 @@ FILE_ID=$(echo "$GET_RESPONSE" | jq -r '.file_id // empty')
 
 if [[ -z "$UPLOAD_URL_SLACK" || -z "$FILE_ID" ]]; then
     echo "Failed to get Slack upload URL"
-    echo "Response was:"
     echo "$GET_RESPONSE"
     exit 1
 fi
 
 echo "Got upload_url and file_id"
 
-# Step 2: PUT the file to the temporary URL
+# Step 2: Upload the file
 curl -s -T "$TEXT_FILE" "$UPLOAD_URL_SLACK" > /dev/null
 
-# Step 3: Complete the upload
+# Step 3: Complete the upload (with title + full response logging)
 INITIAL_COMMENT="<@${USER_ID}> New log uploaded:  <${UPLOAD_URL}|View Log> <-Download Now! link expires in 72 hours>"
 
 COMPLETE_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -H "Content-type: application/json" \
-  --data "{\"files\":[{\"id\":\"$FILE_ID\"}],\"channel_id\":\"$CHANNEL_ID\",\"initial_comment\":\"$INITIAL_COMMENT\"}" \
+  --data "{\"files\":[{\"id\":\"$FILE_ID\",\"title\":\"$(basename "$TEXT_FILE")\"}],\"channel_id\":\"$CHANNEL_ID\",\"initial_comment\":\"$INITIAL_COMMENT\"}" \
   https://slack.com/api/files.completeUploadExternal)
 
+echo "=== Full Slack completeUploadExternal response ==="
+echo "$COMPLETE_RESPONSE"
+echo "==============================================="
+
 if echo "$COMPLETE_RESPONSE" | grep -q '"ok":true'; then
-    echo "✅ Permanent file uploaded to Slack!"
+    echo "✅ API says success"
 else
     echo "❌ Slack upload failed"
-    echo "$COMPLETE_RESPONSE"
 fi
+
+# =============== DEBUG TEST: Can the bot still post normal messages? ===============
+echo "Testing normal chat.postMessage to the same channel..."
+TEST_RESPONSE=$(curl -s -X POST \
+  -H "Authorization: Bearer $mana" \
+  -H "Content-type: application/json" \
+  --data "{\"channel\":\"$CHANNEL_ID\",\"text\":\"Test message from LogLiefje script - file upload debug $(date '+%H:%M:%S')\"}" \
+  https://slack.com/api/chat.postMessage)
+
+echo "chat.postMessage response:"
+echo "$TEST_RESPONSE"
