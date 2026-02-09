@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.19"   # ← incremented
+echo "v0.00.20"   # ← incremented
 echo > mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -17,6 +17,32 @@ CONFIG_FILE="$HOME/.logliefje_name"
 # Create / prepare your .txt file in this section
 # ================================================
 
+#--- BEGIN SYSTEM SPECS ---
+(echo && \
+echo "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
+echo "System Uptime & Load: $(uptime | sed -E 's/,? +load average:/ load average % :/')" && \
+echo "Last Boot: $(who -b | awk '{print $3 " " $4}')" && \
+echo "Container Detection:" && \
+echo "Kernel: $(uname -r) -- Ubuntu: $(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d'"' -f2 || echo "N/A") -- Virtualization: $(systemd-detect-virt 2>/dev/null || echo "bare metal")" && \
+echo "$(grep "model name" /proc/cpuinfo | head -n1 | cut -d: -f2- | xargs) CPU Cores / Threads: $(nproc) cores, $(grep -c ^processor /proc/cpuinfo) threads" && \
+echo "CPU Frequency: $(awk '/cpu MHz/ {sum+=$4; count++} END {printf "%.1f GHz", sum/count/1000}' /proc/cpuinfo) -- Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "N/A")" && \
+echo "CPU Utilization: $(top -bn1 | grep "Cpu(s)" | awk '{print $2+$4 "% used"}') -- CPU Load Average% (60/120/180 min): $(uptime | awk -F'load average: ' '{print $2}')" && \
+echo "CPU Temp: $(sensors 2>/dev/null | grep -m1 "Package id" | awk '{print $4}' || echo "N/A") -- CPU Power: $(for p in /sys/class/powercap/intel-rapl/intel-rapl:0/power_uw /sys/class/powercap/intel-rapl:0:0/power_uw; do [ -r "$p" ] && cat "$p" 2>/dev/null | awk '{printf "%.1f W", $1/1000000}' && break; done || echo "N/A") -- GPU(s) Power: $(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | awk '{s+=$1} END {print (s?s:"N/A")}' || echo "N/A")W -- Total Power (GPU+CPU): $(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | awk '{s+=$1} END {print (s?s:"N/A")}' || echo "N/A")W" && \
+echo "System Temperatures: $(sensors 2>/dev/null | grep -E 'Core|nvme|temp1' | head -n 5 | awk '{print $1 $2 " " $3}' | tr '\n' ' ' || echo "N/A")" && \
+echo "RAID Status: $(cat /proc/mdstat 2>/dev/null | head -n1 || echo "No software RAID detected")" && \
+echo "Root Disk (/): $(df -h / | awk 'NR==2 {print $2 " total, " $4 " available"}') -- Drive Type (sda): $( [ "$(cat /sys/block/sda/queue/rotational 2>/dev/null)" = "0" ] && echo "SSD" || echo "HDD or N/A") -- Filesystem Types: $(cat /proc/mounts 2>/dev/null | grep -E 'ext4|xfs|btrfs' | awk '{print $3}' | sort | uniq | tr '\n' ', ' | sed 's/, $//')" && \
+echo "Host Address: $(hostname) | $(curl -s --max-time 4 ifconfig.me || echo "N/A")" && \
+printf "          Total    Used    Free   Shared   Cache   Available\n" && \
+printf "Mem:     %-8s %-7s %-7s %-8s %-7s %-8s\n" $(free -h | awk '/Mem:/ {print $2, $3, $4, $5, $6, $7}') && \
+printf "Swap:    %-8s %-7s %-8s\n" $(free -h | awk '/Swap:/ {print $2, $3, $4}') && \
+echo "Negotiated Link Speed: $(INTERFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5}' | head -n1) && [ -n "$INTERFACE" ] && ethtool "$INTERFACE" 2>/dev/null | grep -i "Speed:" | awk '{print $2}' || echo "N/A")" && \
+echo "Docker: $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo "N/A") | Podman: $(docker exec podman podman --version 2>/dev/null | awk '{print $3}' || echo "(nested in Docker)")" && \
+echo "DNS Service: $(awk '/^nameserver/ {printf "%s%s", (c++ ? ", " : ""), $2} END {if (!c) print "N/A"}' /etc/resolv.conf 2>/dev/null || echo "N/A")" && \
+echo "Firewall: $( (ufw status 2>/dev/null | head -n1 | grep -q "Status:" && ufw status | head -n1) || echo "n/a")" && \
+echo "Nearest Solana RPC Latency: $(curl -s --max-time 5 -w "%{time_total}" -o /dev/null https://api.mainnet-beta.solana.com | awk '{printf "%.0f ms", $1*1000}' || echo "N/A")" && \
+echo "Latency (Google DNS):" && \
+ping -c 4 8.8.8.8 | tail -n 2 ) | tee -a mylog.txt
+#--- END SYSTEM SPECS ---
 #--- BEGIN NVIDIA SMI ---
 # ─────────────────────────────────────────────────────────────────────────────
 # nvidia-smi-custom  –  Compact single-line-per-GPU display (embedded)
