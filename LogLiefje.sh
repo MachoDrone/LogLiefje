@@ -1,6 +1,6 @@
 #!/bin/bash
-echo "v0.00.15"   # ← incremented
-sleep 3
+echo ""
+echo "v0.00.16"   # ← incremented
 
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -10,6 +10,7 @@ sleep 3
 CHANNEL_ID="C093HNDQ422"
 USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
+CONFIG_FILE="$HOME/.logliefje_name"
 
 # ================================================
 # === YOUR CODE GOES HERE ========================
@@ -27,6 +28,34 @@ TEXT_FILE="mylog.txt"   # ← must exist
 # ================================================
 # === DO NOT EDIT BELOW THIS LINE ================
 # ================================================
+
+# ------------- DISCORD NAME PROMPT -------------
+SAVED_NAME=""
+if [[ -f "$CONFIG_FILE" ]]; then
+    SAVED_NAME=$(<"$CONFIG_FILE")
+fi
+
+if [[ -n "$SAVED_NAME" ]]; then
+    printf "\033[1;34mEnter Discord Name for support reference [%s]: \033[0m" "$SAVED_NAME"
+else
+    printf "\033[1;34mEnter Discord Name for support reference: \033[0m"
+fi
+read -r DISCORD_NAME
+
+if [[ -z "$DISCORD_NAME" && -n "$SAVED_NAME" ]]; then
+    DISCORD_NAME="$SAVED_NAME"
+elif [[ -z "$DISCORD_NAME" ]]; then
+    echo "Error: Discord name is required!"
+    exit 1
+fi
+
+# Save for future use
+echo "$DISCORD_NAME" > "$CONFIG_FILE"
+
+# Sanitize name for filename (keep only alphanumeric, dots, hyphens, underscores)
+SAFE_NAME=$(echo "$DISCORD_NAME" | tr -cd 'a-zA-Z0-9._-')
+UTC_TS=$(date -u +%Y%m%d_%H%M%SZ)
+SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
 
 # ------------- MANA OBFUSCATION (do not change) -------------
 mana2=$'\x62'
@@ -61,7 +90,7 @@ fi
 # Slack Step 1: Get upload URL (silent, fast API call)
 GET_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
-  -F "filename=$(basename "$TEXT_FILE")" \
+  -F "filename=$SLACK_FILENAME" \
   -F "length=$FILE_SIZE" \
   -F "snippet_type=text" \
   https://slack.com/api/files.getUploadURLExternal)
@@ -80,13 +109,16 @@ curl -# -X POST \
   "$UPLOAD_URL_SLACK" > /dev/null
 
 # Slack Step 3: Complete upload and share to channel
+# Escape Discord name for JSON safety
+DISCORD_NAME_ESC=$(echo "$DISCORD_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
 COMPLETE_RESPONSE=$(curl -s -X POST \
   -H "Authorization: Bearer $mana" \
   -H "Content-type: application/json; charset=utf-8" \
   --data "{
-    \"files\": [{\"id\":\"$FILE_ID\",\"title\":\"$(basename "$TEXT_FILE")\"}],
+    \"files\": [{\"id\":\"$FILE_ID\",\"title\":\"$SLACK_FILENAME\"}],
     \"channel_id\": \"$CHANNEL_ID\",
-    \"initial_comment\": \"<@${USER_ID}> New log uploaded\n\n(link expires in ${EXPIRATION}): ${UPLOAD_URL}\"
+    \"initial_comment\": \"<@${USER_ID}> (link expires in ${EXPIRATION}): ${UPLOAD_URL}  (${DISCORD_NAME_ESC})\"
   }" \
   https://slack.com/api/files.completeUploadExternal)
 
