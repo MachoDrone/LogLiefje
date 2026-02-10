@@ -225,11 +225,11 @@ echo "">> mylog.txt
 docker -v>> mylog.txt
 docker ps>> mylog.txt
 echo "">> mylog.txt
-echo "docker exec podman podman ps -a (COUNT AFTER 5)">> mylog.txt
+echo "docker exec podman podman ps -a (COUNT AFTER 20)">> mylog.txt
 {
   ps=$(docker ps -a)
-  echo "$ps" | head -n 20
-  echo "*** Plus $(( $(echo "$ps" | wc -l) - 20 < 0 ? 0 : $(echo "$ps" | wc -l) - 20 )) more containers ***"
+  echo "$ps" | head -n 21 #add one additional number to count the docker header
+  echo "*** Plus $(( $(echo "$ps" | wc -l) - 20 < 0 ? 0 : $(echo "$ps" | wc -l) - 21 )) more containers ***" #add one additional number to count the docker header
 } >> mylog.txt
 #--- END DOCKER COMMANDS ---
 
