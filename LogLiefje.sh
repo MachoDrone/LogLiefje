@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.26"   # ← incremented
+echo "v0.00.27"   # ← incremented
 echo > mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -36,6 +36,24 @@ docker logs -t -f nosana-node 2>&1 \
     if (market=="") market="N/A"
     print "Host: https://explore.nosana.com/hosts/" wallet " (from latest log)"
     print "First Market Recommended: " market " (from top of log)"
+  }
+' >> mylog.txt
+#-- THE NEXT BLOCK LOOKS FOR THE LAST RECOMMENDED MARKET IN THE LOGS --
+docker logs --tail 5000 nosana-node 2>&1 \
+| awk '{ gsub(/\r/, "", $0); gsub(/\033\[[0-9;]*[[:alpha:]]/, "", $0); print }' \
+| tac \
+| awk '
+  /Grid recommended/ && market=="" {
+    for (i=1; i<=NF; i++) if ($i=="recommended") { market=$(i+1); break }
+  }
+  /Wallet:/ && wallet=="" { wallet=$NF }
+  END {
+    if (wallet!="") gsub(/[^1-9A-HJ-NP-Za-km-z]/, "", wallet)
+    if (market!="") gsub(/[^1-9A-HJ-NP-Za-km-z]/, "", market)
+    if (wallet=="") wallet="N/A"
+    if (market=="") market="N/A"
+    print "Host: https://explore.nosana.com/hosts/" wallet " (from latest log)"
+    print "Last Market Recommended: " market " (from bottom-up tail 5000)"
   }
 ' >> mylog.txt
 #--- END WALLET AND RECOMMENDED MARKET ---
