@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.22"   # ← incremented
+echo "v0.00.23"   # ← incremented
 echo > mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
