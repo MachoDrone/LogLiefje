@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.31">> mylog.txt   # ← incremented
+echo "log collector v0.00.32">> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -226,10 +226,11 @@ docker -v>> mylog.txt
 docker ps>> mylog.txt
 echo "">> mylog.txt
 echo "docker exec podman podman ps -a (COUNT AFTER 5)">> mylog.txt
-ps=$(docker ps -a)
-echo "$ps" | head -n 6
-echo "+ $(($(echo "$ps" | wc -l) - 6)) more containers"
-echo "">> mylog.txt
+{
+  ps=$(docker ps -a)
+  echo "$ps" | head -n 20
+  echo "*** Plus $(( $(echo "$ps" | wc -l) - 20 < 0 ? 0 : $(echo "$ps" | wc -l) - 20 )) more containers ***"
+} >> mylog.txt
 #--- END DOCKER COMMANDS ---
 
 
