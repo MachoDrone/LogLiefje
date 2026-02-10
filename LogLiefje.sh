@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.37" >> mylog.txt   # ← incremented
+echo "log collector v0.00.38" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -55,35 +55,116 @@ rm -f "$tmp_log"
 echo "" >> mylog.txt
 
 #--- BEGIN POWER CALCS ---
+is_num() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
 get_cpu_power_w() {
-  local p raw
+  local d name raw sum got
+  sum="0"
+  got=0
 
-  # Intel RAPL (micro-watts -> watts)
-  for p in /sys/class/powercap/intel-rapl:*/power_uw /sys/class/powercap/intel-rapl:*/intel-rapl:*:*/power_uw; do
-    [ -r "$p" ] || continue
-    raw="$(cat "$p" 2>/dev/null)"
-    [[ "$raw" =~ ^[0-9]+$ ]] || continue
-    awk -v u="$raw" 'BEGIN { printf "%.2f", u/1000000 }'
+  # 1) Intel RAPL direct power (best if available)
+  for d in /sys/class/powercap/intel-rapl:*; do
+    [ -d "$d" ] || continue
+    [ -r "$d/name" ] || continue
+    name="$(cat "$d/name" 2>/dev/null)"
+    case "$name" in
+      package-*|psys)
+        if [ -r "$d/power_uw" ]; then
+          raw="$(cat "$d/power_uw" 2>/dev/null)"
+          if [[ "$raw" =~ ^[0-9]+$ ]]; then
+            sum="$(awk -v s="$sum" -v u="$raw" 'BEGIN{printf "%.6f", s + (u/1000000)}')"
+            got=1
+          fi
+        fi
+      ;;
+    esac
+  done
+  if [ "$got" -eq 1 ]; then
+    awk -v s="$sum" 'BEGIN{printf "%.2f", s}'
     return 0
+  fi
+
+  # 2) Intel RAPL energy fallback (works on systems without power_uw)
+  local -a dirs e_start e_max
+  local i j e2 de t1 t2 dt
+  i=0
+  for d in /sys/class/powercap/intel-rapl:*; do
+    [ -d "$d" ] || continue
+    [ -r "$d/name" ] || continue
+    name="$(cat "$d/name" 2>/dev/null)"
+    case "$name" in
+      package-*|psys)
+        [ -r "$d/energy_uj" ] || continue
+        raw="$(cat "$d/energy_uj" 2>/dev/null)"
+        [[ "$raw" =~ ^[0-9]+$ ]] || continue
+        dirs[i]="$d"
+        e_start[i]="$raw"
+        if [ -r "$d/max_energy_range_uj" ]; then
+          e_max[i]="$(cat "$d/max_energy_range_uj" 2>/dev/null)"
+        else
+          e_max[i]="0"
+        fi
+        i=$((i+1))
+      ;;
+    esac
   done
 
-  # Generic hwmon power sensors (common on AMD boards)
-  for p in /sys/class/hwmon/hwmon*/power1_average /sys/class/hwmon/hwmon*/power1_input; do
-    [ -r "$p" ] || continue
-    raw="$(cat "$p" 2>/dev/null)"
-    [[ "$raw" =~ ^[0-9]+$ ]] || continue
-    awk -v u="$raw" 'BEGIN { printf "%.2f", u/1000000 }'
-    return 0
-  done
+  if [ "$i" -gt 0 ]; then
+    t1="$(date +%s.%N)"
+    sleep 0.25
+    t2="$(date +%s.%N)"
+    dt="$(awk -v a="$t1" -v b="$t2" 'BEGIN{printf "%.6f", b-a}')"
 
-  # lm-sensors fallback (AMD PPT)
+    sum="0"
+    got=0
+    for ((j=0; j<i; j++)); do
+      e2="$(cat "${dirs[j]}/energy_uj" 2>/dev/null)"
+      [[ "$e2" =~ ^[0-9]+$ ]] || continue
+      de=$(( e2 - e_start[j] ))
+      if [ "$de" -lt 0 ] && [[ "${e_max[j]}" =~ ^[0-9]+$ ]] && [ "${e_max[j]}" -gt 0 ]; then
+        de=$(( e2 + e_max[j] - e_start[j] ))
+      fi
+      if [ "$de" -ge 0 ]; then
+        sum="$(awk -v s="$sum" -v de="$de" 'BEGIN{printf "%.6f", s + (de/1000000)}')"
+        got=1
+      fi
+    done
+
+    if [ "$got" -eq 1 ] && awk -v d="$dt" 'BEGIN{exit !(d>0)}'; then
+      awk -v e="$sum" -v d="$dt" 'BEGIN{printf "%.2f", e/d}'
+      return 0
+    fi
+  fi
+
+  # 3) hwmon fallback (common on AMD / some Intel boards)
+  sum="0"
+  got=0
+  for d in /sys/class/hwmon/hwmon*; do
+    [ -d "$d" ] || continue
+    for f in "$d"/power1_average "$d"/power1_input; do
+      [ -r "$f" ] || continue
+      raw="$(cat "$f" 2>/dev/null)"
+      [[ "$raw" =~ ^[0-9]+$ ]] || continue
+      sum="$(awk -v s="$sum" -v u="$raw" 'BEGIN{printf "%.6f", s + (u/1000000)}')"
+      got=1
+      break
+    done
+  done
+  if [ "$got" -eq 1 ]; then
+    awk -v s="$sum" 'BEGIN{printf "%.2f", s}'
+    return 0
+  fi
+
+  # 4) sensors PPT fallback
   raw="$(sensors 2>/dev/null | awk '
     /^[[:space:]]*PPT:/ {
       v=$2
       gsub(/\+|W/, "", v)
       if (v ~ /^[0-9.]+$/) { print v; exit }
-    }'
-  )"
+    }
+  ')"
   if [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     printf "%.2f" "$raw"
     return 0
@@ -93,10 +174,14 @@ get_cpu_power_w() {
 }
 
 get_gpu_power_w() {
-  nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null \
-  | awk '
-      /^[[:space:]]*[0-9]+([.][0-9]+)?[[:space:]]*$/ { s += $1; n++ }
-      END { if (n) printf "%.2f", s; else print "N/A" }'
+  nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | awk '
+    {
+      gsub(/\r/, "", $0)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+      if ($0 ~ /^[0-9]+([.][0-9]+)?$/) { s += $0; n++ }
+    }
+    END { if (n>0) printf "%.2f", s; else print "N/A" }
+  '
 }
 
 CPU_POWER_W="$(get_cpu_power_w)"
@@ -107,14 +192,15 @@ BEGIN {
   cnum=(c ~ /^[0-9]+([.][0-9]+)?$/)
   gnum=(g ~ /^[0-9]+([.][0-9]+)?$/)
   if (cnum && gnum) printf "%.2f", c + g
+  else if (cnum) printf "%.2f", c
+  else if (gnum) printf "%.2f", g
   else print "N/A"
 }')"
 
-if [[ "$CPU_POWER_W" =~ ^[0-9]+([.][0-9]+)?$ ]]; then CPU_POWER_DISP="${CPU_POWER_W}W"; else CPU_POWER_DISP="N/A"; fi
-if [[ "$GPU_POWER_W" =~ ^[0-9]+([.][0-9]+)?$ ]]; then GPU_POWER_DISP="${GPU_POWER_W}W"; else GPU_POWER_DISP="N/A"; fi
-if [[ "$TOTAL_POWER_W" =~ ^[0-9]+([.][0-9]+)?$ ]]; then TOTAL_POWER_DISP="${TOTAL_POWER_W}W"; else TOTAL_POWER_DISP="N/A"; fi
+if is_num "$CPU_POWER_W"; then CPU_POWER_DISP="${CPU_POWER_W}W"; else CPU_POWER_DISP="N/A"; fi
+if is_num "$GPU_POWER_W"; then GPU_POWER_DISP="${GPU_POWER_W}W"; else GPU_POWER_DISP="N/A"; fi
+if is_num "$TOTAL_POWER_W"; then TOTAL_POWER_DISP="${TOTAL_POWER_W}W"; else TOTAL_POWER_DISP="N/A"; fi
 #--- END POWER CALCS ---
-
 #--- BEGIN SYSTEM SPECS ---
 (
 echo "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
