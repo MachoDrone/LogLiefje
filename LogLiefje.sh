@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.35">> mylog.txt   # ← incremented
+echo "log collector v0.00.36">> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -223,8 +223,6 @@ docker exec podman podman ps -a>> mylog.txt
 echo "">> mylog.txt
 docker -v>> mylog.txt
 docker ps>> mylog.txt
-echo "">> mylog.txt
-echo "docker exec podman podman ps -a (COUNT AFTER 20)">> mylog.txt
 echo "" >> mylog.txt
 MAX_SHOW=20
 PS_ALL="$(docker ps -a 2>/dev/null || true)"
