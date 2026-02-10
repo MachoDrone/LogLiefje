@@ -43,6 +43,7 @@ echo "Nearest Solana RPC Latency: $(curl -s --max-time 5 -w "%{time_total}" -o /
 echo "Latency (Google DNS):" && \
 ping -c 4 8.8.8.8 | tail -n 2 ) | tee -a mylog.txt
 #--- END SYSTEM SPECS ---
+echo "">> mylog.txt
 #--- BEGIN NVIDIA SMI ---
 # ─────────────────────────────────────────────────────────────────────────────
 # nvidia-smi-custom  –  Compact single-line-per-GPU display (embedded)
@@ -179,9 +180,11 @@ else
     echo "ERROR: nvidia-smi not found in PATH" >> mylog.txt
 fi
 #--- END NVIDIA SMI ---
+echo "">> mylog.txt
 #--- BEGIN DOCKER COMMANDS ---
-echo " " && docker ps>> mylog.txt
-echo " " && docker exec podman podman ps>> mylog.txt
+docker ps>> mylog.txt
+echo "">> mylog.txt
+docker exec podman podman ps>> mylog.txt
 #--- END DOCKER COMMANDS ---
 
 
