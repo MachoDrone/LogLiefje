@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.27"   # ← incremented
+echo "v0.00.28"   # ← incremented
 echo > mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -17,45 +17,38 @@ CONFIG_FILE="$HOME/.logliefje_name"
 # Create / prepare your .txt file in this section
 # ================================================
 
-#--- THE WALLET AND RECOMMENDED MARKET EXTRACTED FROM THE HEAD OF THE LATEST LOG ---
-docker logs -t -f nosana-node 2>&1 \
-| head -n 30 \
-| awk '
-  {
-    gsub(/\r/, "", $0)
-    gsub(/\033\[[0-9;]*[[:alpha:]]/, "", $0)  # remove ANSI escapes
-  }
-  /Wallet:/ { wallet=$NF }
-  /Grid recommended/ {
-    for (i=1; i<=NF; i++) if ($i=="recommended") market=$(i+1)
-  }
-  END {
-    if (wallet!="") gsub(/[^1-9A-HJ-NP-Za-km-z]/, "", wallet)
-    if (market!="") gsub(/[^1-9A-HJ-NP-Za-km-z]/, "", market)
-    if (wallet=="") wallet="N/A"
-    if (market=="") market="N/A"
-    print "Host: https://explore.nosana.com/hosts/" wallet " (from latest log)"
-    print "First Market Recommended: " market " (from top of log)"
-  }
-' >> mylog.txt
-#-- THE NEXT BLOCK LOOKS FOR THE LAST RECOMMENDED MARKET IN THE LOGS --
+#--- THE WALLET AND RECOMMENDED MARKET EXTRACTED FROM THE HEAD AND TAIL OF THE LATEST LOG ---
+tmp_log="$(mktemp)"
+
 docker logs --tail 5000 nosana-node 2>&1 \
 | awk '{ gsub(/\r/, "", $0); gsub(/\033\[[0-9;]*[[:alpha:]]/, "", $0); print }' \
-| tac \
-| awk '
-  /Grid recommended/ && market=="" {
-    for (i=1; i<=NF; i++) if ($i=="recommended") { market=$(i+1); break }
+> "$tmp_log"
+
+wallet="$(awk '/Wallet:/ {print $NF; exit}' "$tmp_log" | tr -cd '1-9A-HJ-NP-Za-km-z')"
+
+first_market="$(awk '
+  /Grid recommended/ {
+    for (i=1; i<=NF; i++) if ($i=="recommended") { print $(i+1); exit }
   }
-  /Wallet:/ && wallet=="" { wallet=$NF }
-  END {
-    if (wallet!="") gsub(/[^1-9A-HJ-NP-Za-km-z]/, "", wallet)
-    if (market!="") gsub(/[^1-9A-HJ-NP-Za-km-z]/, "", market)
-    if (wallet=="") wallet="N/A"
-    if (market=="") market="N/A"
-    print "Host: https://explore.nosana.com/hosts/" wallet " (from latest log)"
-    print "Last Market Recommended: " market " (from bottom-up tail 5000)"
+' "$tmp_log" | tr -cd '1-9A-HJ-NP-Za-km-z')"
+
+last_market="$(tac "$tmp_log" | awk '
+  /Grid recommended/ {
+    for (i=1; i<=NF; i++) if ($i=="recommended") { print $(i+1); exit }
   }
-' >> mylog.txt
+' | tr -cd '1-9A-HJ-NP-Za-km-z')"
+
+[ -z "$wallet" ] && wallet="N/A"
+[ -z "$first_market" ] && first_market="N/A"
+[ -z "$last_market" ] && last_market="N/A"
+
+{
+  echo "Host: https://explore.nosana.com/hosts/$wallet (from latest log)"
+  echo "First Market Recommended: $first_market (from the top of latest log)"
+  echo "Last Market Recommended: $last_market (from bottom-up tail 5000)"
+} | tee -a mylog.txt
+
+rm -f "$tmp_log"
 #--- END WALLET AND RECOMMENDED MARKET ---
 echo "">> mylog.txt
 #--- BEGIN SYSTEM SPECS ---
