@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.36">> mylog.txt   # ← incremented
+echo "log collector v0.00.37" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -51,9 +51,73 @@ last_market="$(tac "$tmp_log" | awk '
 
 rm -f "$tmp_log"
 #--- END WALLET AND RECOMMENDED MARKET ---
-echo "">> mylog.txt
+
+echo "" >> mylog.txt
+
+#--- BEGIN POWER CALCS ---
+get_cpu_power_w() {
+  local p raw
+
+  # Intel RAPL (micro-watts -> watts)
+  for p in /sys/class/powercap/intel-rapl:*/power_uw /sys/class/powercap/intel-rapl:*/intel-rapl:*:*/power_uw; do
+    [ -r "$p" ] || continue
+    raw="$(cat "$p" 2>/dev/null)"
+    [[ "$raw" =~ ^[0-9]+$ ]] || continue
+    awk -v u="$raw" 'BEGIN { printf "%.2f", u/1000000 }'
+    return 0
+  done
+
+  # Generic hwmon power sensors (common on AMD boards)
+  for p in /sys/class/hwmon/hwmon*/power1_average /sys/class/hwmon/hwmon*/power1_input; do
+    [ -r "$p" ] || continue
+    raw="$(cat "$p" 2>/dev/null)"
+    [[ "$raw" =~ ^[0-9]+$ ]] || continue
+    awk -v u="$raw" 'BEGIN { printf "%.2f", u/1000000 }'
+    return 0
+  done
+
+  # lm-sensors fallback (AMD PPT)
+  raw="$(sensors 2>/dev/null | awk '
+    /^[[:space:]]*PPT:/ {
+      v=$2
+      gsub(/\+|W/, "", v)
+      if (v ~ /^[0-9.]+$/) { print v; exit }
+    }'
+  )"
+  if [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf "%.2f" "$raw"
+    return 0
+  fi
+
+  echo "N/A"
+}
+
+get_gpu_power_w() {
+  nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null \
+  | awk '
+      /^[[:space:]]*[0-9]+([.][0-9]+)?[[:space:]]*$/ { s += $1; n++ }
+      END { if (n) printf "%.2f", s; else print "N/A" }'
+}
+
+CPU_POWER_W="$(get_cpu_power_w)"
+GPU_POWER_W="$(get_gpu_power_w)"
+
+TOTAL_POWER_W="$(awk -v c="$CPU_POWER_W" -v g="$GPU_POWER_W" '
+BEGIN {
+  cnum=(c ~ /^[0-9]+([.][0-9]+)?$/)
+  gnum=(g ~ /^[0-9]+([.][0-9]+)?$/)
+  if (cnum && gnum) printf "%.2f", c + g
+  else print "N/A"
+}')"
+
+if [[ "$CPU_POWER_W" =~ ^[0-9]+([.][0-9]+)?$ ]]; then CPU_POWER_DISP="${CPU_POWER_W}W"; else CPU_POWER_DISP="N/A"; fi
+if [[ "$GPU_POWER_W" =~ ^[0-9]+([.][0-9]+)?$ ]]; then GPU_POWER_DISP="${GPU_POWER_W}W"; else GPU_POWER_DISP="N/A"; fi
+if [[ "$TOTAL_POWER_W" =~ ^[0-9]+([.][0-9]+)?$ ]]; then TOTAL_POWER_DISP="${TOTAL_POWER_W}W"; else TOTAL_POWER_DISP="N/A"; fi
+#--- END POWER CALCS ---
+
 #--- BEGIN SYSTEM SPECS ---
-(echo "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
+(
+echo "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
 echo "System Uptime & Load: $(uptime | sed -E 's/,? +load average:/ load average % :/')" && \
 echo "Last Boot: $(who -b | awk '{print $3 " " $4}')" && \
 echo "Container Detection:" && \
@@ -61,7 +125,7 @@ echo "Kernel: $(uname -r) -- Ubuntu: $(cat /etc/os-release 2>/dev/null | grep PR
 echo "$(grep "model name" /proc/cpuinfo | head -n1 | cut -d: -f2- | xargs) CPU Cores / Threads: $(nproc) cores, $(grep -c ^processor /proc/cpuinfo) threads" && \
 echo "CPU Frequency: $(awk '/cpu MHz/ {sum+=$4; count++} END {printf "%.1f GHz", sum/count/1000}' /proc/cpuinfo) -- Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "N/A")" && \
 echo "CPU Utilization: $(top -bn1 | grep "Cpu(s)" | awk '{print $2+$4 "% used"}') -- CPU Load Average% (60/120/180 min): $(uptime | awk -F'load average: ' '{print $2}')" && \
-echo "CPU Temp: $(sensors 2>/dev/null | grep -m1 "Package id" | awk '{print $4}' || echo "N/A") -- CPU Power: $(for p in /sys/class/powercap/intel-rapl/intel-rapl:0/power_uw /sys/class/powercap/intel-rapl:0:0/power_uw; do [ -r "$p" ] && cat "$p" 2>/dev/null | awk '{printf "%.1f W", $1/1000000}' && break; done || echo "N/A") -- GPU(s) Power: $(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | awk '{s+=$1} END {print (s?s:"N/A")}' || echo "N/A")W -- Total Power (GPU+CPU): $(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | awk '{s+=$1} END {print (s?s:"N/A")}' || echo "N/A")W" && \
+echo "CPU Temp: $(sensors 2>/dev/null | grep -m1 "Package id" | awk '{print $4}' || echo "N/A") -- CPU Power: ${CPU_POWER_DISP} -- GPU(s) Power: ${GPU_POWER_DISP} -- Total Power (GPU+CPU): ${TOTAL_POWER_DISP}" && \
 echo "System Temperatures: $(sensors 2>/dev/null | grep -E 'Core|nvme|temp1' | head -n 5 | awk '{print $1 $2 " " $3}' | tr '\n' ' ' || echo "N/A")" && \
 echo "RAID Status: $(cat /proc/mdstat 2>/dev/null | head -n1 || echo "No software RAID detected")" && \
 echo "Root Disk (/): $(df -h / | awk 'NR==2 {print $2 " total, " $4 " available"}') -- Drive Type (sda): $( [ "$(cat /sys/block/sda/queue/rotational 2>/dev/null)" = "0" ] && echo "SSD" || echo "HDD or N/A") -- Filesystem Types: $(cat /proc/mounts 2>/dev/null | grep -E 'ext4|xfs|btrfs' | awk '{print $3}' | sort | uniq | tr '\n' ', ' | sed 's/, $//')" && \
@@ -74,9 +138,12 @@ echo "DNS Service: $(awk '/^nameserver/ {printf "%s%s", (c++ ? ", " : ""), $2} E
 echo "Firewall: $( (ufw status 2>/dev/null | head -n1 | grep -q "Status:" && ufw status | head -n1) || echo "n/a")" && \
 echo "Nearest Solana RPC Latency: $(curl -s --max-time 5 -w "%{time_total}" -o /dev/null https://api.mainnet-beta.solana.com | awk '{printf "%.0f ms", $1*1000}' || echo "N/A")" && \
 echo "Latency (Google DNS):" && \
-ping -c 4 8.8.8.8 | tail -n 2 ) | tee -a mylog.txt
+ping -c 4 8.8.8.8 | tail -n 2
+) | tee -a mylog.txt
 #--- END SYSTEM SPECS ---
-echo "">> mylog.txt
+
+echo "" >> mylog.txt
+
 #--- BEGIN NVIDIA SMI ---
 # ─────────────────────────────────────────────────────────────────────────────
 # nvidia-smi-custom  –  Compact single-line-per-GPU display (embedded)
@@ -213,17 +280,20 @@ else
     echo "ERROR: nvidia-smi not found in PATH" >> mylog.txt
 fi
 #--- END NVIDIA SMI ---
-echo "">> mylog.txt
-#--- BEGIN DOCKER COMMANDS ---
-docker exec podman podman -v | awk '{print "podman version " $3 " (nested in Docker)"}'>> mylog.txt
-docker exec podman podman ps>> mylog.txt
-echo "">> mylog.txt
-echo "docker exec podman podman ps -a">> mylog.txt
-docker exec podman podman ps -a>> mylog.txt
-echo "">> mylog.txt
-docker -v>> mylog.txt
-docker ps>> mylog.txt
+
 echo "" >> mylog.txt
+
+#--- BEGIN DOCKER COMMANDS ---
+docker exec podman podman -v | awk '{print "podman version " $3 " (nested in Docker)"}' >> mylog.txt
+docker exec podman podman ps >> mylog.txt
+echo "" >> mylog.txt
+echo "docker exec podman podman ps -a" >> mylog.txt
+docker exec podman podman ps -a >> mylog.txt
+echo "" >> mylog.txt
+docker -v >> mylog.txt
+docker ps >> mylog.txt
+echo "" >> mylog.txt
+
 MAX_SHOW=20
 PS_ALL="$(docker ps -a 2>/dev/null || true)"
 
@@ -241,13 +311,11 @@ else
 fi
 #--- END DOCKER COMMANDS ---
 
-
-
-
 # ================================================
 # === DO NOT EDIT BELOW THIS LINE ================
 # ================================================
 TEXT_FILE="mylog.txt"   # ← must exist
+
 # ------------- DISCORD NAME PROMPT -------------
 SAVED_NAME=""
 if [[ -f "$CONFIG_FILE" ]]; then
