@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.34">> mylog.txt   # ← incremented
+echo "log collector v0.00.35">> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -225,21 +225,21 @@ docker -v>> mylog.txt
 docker ps>> mylog.txt
 echo "">> mylog.txt
 echo "docker exec podman podman ps -a (COUNT AFTER 20)">> mylog.txt
-echo "">> mylog.txt
+echo "" >> mylog.txt
 MAX_SHOW=20
-PODMAN_PS_ALL="$(docker exec podman podman ps -a 2>/dev/null || true)"
+PS_ALL="$(docker ps -a 2>/dev/null || true)"
 
-if [ -n "$PODMAN_PS_ALL" ]; then
-  TOTAL_CONTAINERS="$(printf '%s\n' "$PODMAN_PS_ALL" | awk 'NR>1 && NF{c++} END{print c+0}')"
+if [ -n "$PS_ALL" ]; then
+  TOTAL_CONTAINERS="$(printf '%s\n' "$PS_ALL" | awk 'NR>1 && NF{c++} END{print c+0}')"
   NOT_SHOWN=$(( TOTAL_CONTAINERS > MAX_SHOW ? TOTAL_CONTAINERS - MAX_SHOW : 0 ))
 
   {
-    echo "docker exec podman podman ps -a (${TOTAL_CONTAINERS} total, ${NOT_SHOWN} not shown)"
-    printf '%s\n' "$PODMAN_PS_ALL" | head -n $((MAX_SHOW + 1))   # header + first 20 rows
+    echo "docker ps -a (${TOTAL_CONTAINERS} total, ${NOT_SHOWN} not shown)"
+    printf '%s\n' "$PS_ALL" | head -n $((MAX_SHOW + 1))   # header + first 20
     echo "*** Plus ${NOT_SHOWN} more containers ***"
   } >> mylog.txt
 else
-  echo "docker exec podman podman ps -a (unavailable)" >> mylog.txt
+  echo "docker ps -a (unavailable)" >> mylog.txt
 fi
 #--- END DOCKER COMMANDS ---
 
