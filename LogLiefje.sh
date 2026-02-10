@@ -70,7 +70,6 @@ printf "          Total    Used    Free   Shared   Cache   Available\n" && \
 printf "Mem:     %-8s %-7s %-7s %-8s %-7s %-8s\n" $(free -h | awk '/Mem:/ {print $2, $3, $4, $5, $6, $7}') && \
 printf "Swap:    %-8s %-7s %-8s\n" $(free -h | awk '/Swap:/ {print $2, $3, $4}') && \
 echo "Negotiated Link Speed: $(INTERFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5}' | head -n1) && [ -n "$INTERFACE" ] && ethtool "$INTERFACE" 2>/dev/null | grep -i "Speed:" | awk '{print $2}' || echo "N/A")" && \
-echo "Docker: $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo "N/A") | Podman: $(docker exec podman podman --version 2>/dev/null | awk '{print $3}' || echo "(nested in Docker)")" && \
 echo "DNS Service: $(awk '/^nameserver/ {printf "%s%s", (c++ ? ", " : ""), $2} END {if (!c) print "N/A"}' /etc/resolv.conf 2>/dev/null || echo "N/A")" && \
 echo "Firewall: $( (ufw status 2>/dev/null | head -n1 | grep -q "Status:" && ufw status | head -n1) || echo "n/a")" && \
 echo "Nearest Solana RPC Latency: $(curl -s --max-time 5 -w "%{time_total}" -o /dev/null https://api.mainnet-beta.solana.com | awk '{printf "%.0f ms", $1*1000}' || echo "N/A")" && \
@@ -216,7 +215,7 @@ fi
 #--- END NVIDIA SMI ---
 echo "">> mylog.txt
 #--- BEGIN DOCKER COMMANDS ---
-docker exec podman podman -v>> mylog.txt
+docker exec podman podman -v | awk '{print "podman version " $3 " (nested in Docker)"}'>> mylog.txt
 docker exec podman podman ps>> mylog.txt
 echo "">> mylog.txt
 echo "docker exec podman podman ps -a">> mylog.txt
