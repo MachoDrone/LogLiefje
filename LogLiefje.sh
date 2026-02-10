@@ -35,7 +35,7 @@ docker logs -t -f nosana-node 2>&1 \
     if (wallet=="") wallet="N/A"
     if (market=="") market="N/A"
     print "Host: https://explore.nosana.com/hosts/" wallet " (from latest log)"
-    print "Mrkt Rec: " market " (from latest log)"
+    print "First Market Recommended: " market " (from top of log)"
   }
 ' >> mylog.txt
 #--- END WALLET AND RECOMMENDED MARKET ---
