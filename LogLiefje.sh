@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.23"   # ← incremented
+echo "v0.00.24"   # ← incremented
 echo > mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -17,8 +17,25 @@ CONFIG_FILE="$HOME/.logliefje_name"
 # Create / prepare your .txt file in this section
 # ================================================
 
+#--- THE WALLET AND RECOMMENDED MARKET EXTRACTED FROM THE HEAD OF THE LATEST LOG ---
+docker logs -t -f nosana-node 2>&1 \
+| head -n 30 \
+| awk '
+  { gsub(/\r/, "", $0) }
+  /Wallet:/ { wallet=$NF }
+  /Grid recommended/ {
+    for (i=1; i<=NF; i++) if ($i=="recommended") market=$(i+1)
+  }
+  END {
+    if (wallet=="") wallet="N/A"
+    if (market=="") market="N/A"
+    print "Host: https://explore.nosana.com/hosts/" wallet " (from latest log)"
+    print "Mrkt Rec: " market " (from latest log)"
+  }
+' >> mylog.txt
+#--- END WALLET AND RECOMMENDED MARKET ---
+echo "">> mylog.txt
 #--- BEGIN SYSTEM SPECS ---
-(echo && \
 echo "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
 echo "System Uptime & Load: $(uptime | sed -E 's/,? +load average:/ load average % :/')" && \
 echo "Last Boot: $(who -b | awk '{print $3 " " $4}')" && \
