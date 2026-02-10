@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.38" >> mylog.txt   # ← incremented
+echo "log collector v0.00.39" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -59,53 +59,48 @@ is_num() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
 }
 
+# Helper: read a sysfs file; try direct read, fall back to sudo -n (non-interactive)
+_read_sysfs() {
+  local f="$1" v
+  v="$(cat "$f" 2>/dev/null)" && [[ -n "$v" ]] && { echo "$v"; return 0; }
+  v="$(sudo -n cat "$f" 2>/dev/null)" && [[ -n "$v" ]] && { echo "$v"; return 0; }
+  return 1
+}
+
 get_cpu_power_w() {
   local d name raw sum got
-  sum="0"
-  got=0
 
-  # 1) Intel RAPL direct power (best if available)
-  for d in /sys/class/powercap/intel-rapl:*; do
-    [ -d "$d" ] || continue
-    [ -r "$d/name" ] || continue
-    name="$(cat "$d/name" 2>/dev/null)"
-    case "$name" in
-      package-*|psys)
-        if [ -r "$d/power_uw" ]; then
-          raw="$(cat "$d/power_uw" 2>/dev/null)"
-          if [[ "$raw" =~ ^[0-9]+$ ]]; then
-            sum="$(awk -v s="$sum" -v u="$raw" 'BEGIN{printf "%.6f", s + (u/1000000)}')"
-            got=1
-          fi
-        fi
-      ;;
-    esac
-  done
-  if [ "$got" -eq 1 ]; then
-    awk -v s="$sum" 'BEGIN{printf "%.2f", s}'
-    return 0
+  # ── Ensure RAPL kernel modules are loaded ──────────────────────────────
+  # On Ubuntu 22.04+ the module may not auto-load; try all known names.
+  # sudo -n = non-interactive; silently fails if user has no NOPASSWD sudo.
+  if ! ls /sys/class/powercap/intel-rapl:* >/dev/null 2>&1; then
+    sudo -n modprobe intel_rapl_common 2>/dev/null || true
+    sudo -n modprobe intel_rapl_msr    2>/dev/null || true
+    sudo -n modprobe rapl              2>/dev/null || true
+    sleep 0.3
   fi
 
-  # 2) Intel RAPL energy fallback (works on systems without power_uw)
+  # ── 1) RAPL energy_uj delta method (most reliable on Intel & AMD) ──────
+  # Read energy counters, sleep briefly, read again, compute power = ΔE/Δt.
+  # Works on: Intel (all modern), AMD Zen (kernel 5.8+).
+  # Handles wrap-around via max_energy_range_uj.
   local -a dirs e_start e_max
   local i j e2 de t1 t2 dt
   i=0
   for d in /sys/class/powercap/intel-rapl:*; do
     [ -d "$d" ] || continue
-    [ -r "$d/name" ] || continue
-    name="$(cat "$d/name" 2>/dev/null)"
+    [ -e "$d/name" ] || continue
+    name="$(_read_sysfs "$d/name")" || continue
     case "$name" in
       package-*|psys)
-        [ -r "$d/energy_uj" ] || continue
-        raw="$(cat "$d/energy_uj" 2>/dev/null)"
+        raw="$(_read_sysfs "$d/energy_uj")" || continue
         [[ "$raw" =~ ^[0-9]+$ ]] || continue
         dirs[i]="$d"
         e_start[i]="$raw"
-        if [ -r "$d/max_energy_range_uj" ]; then
-          e_max[i]="$(cat "$d/max_energy_range_uj" 2>/dev/null)"
-        else
-          e_max[i]="0"
-        fi
+        local mx
+        mx="$(_read_sysfs "$d/max_energy_range_uj" 2>/dev/null)" || mx="0"
+        [[ "$mx" =~ ^[0-9]+$ ]] || mx="0"
+        e_max[i]="$mx"
         i=$((i+1))
       ;;
     esac
@@ -120,10 +115,11 @@ get_cpu_power_w() {
     sum="0"
     got=0
     for ((j=0; j<i; j++)); do
-      e2="$(cat "${dirs[j]}/energy_uj" 2>/dev/null)"
+      e2="$(_read_sysfs "${dirs[j]}/energy_uj")" || continue
       [[ "$e2" =~ ^[0-9]+$ ]] || continue
       de=$(( e2 - e_start[j] ))
-      if [ "$de" -lt 0 ] && [[ "${e_max[j]}" =~ ^[0-9]+$ ]] && [ "${e_max[j]}" -gt 0 ]; then
+      # Handle counter wrap-around
+      if [ "$de" -lt 0 ] && [ "${e_max[j]}" -gt 0 ]; then
         de=$(( e2 + e_max[j] - e_start[j] ))
       fi
       if [ "$de" -ge 0 ]; then
@@ -138,18 +134,19 @@ get_cpu_power_w() {
     fi
   fi
 
-  # 3) hwmon fallback (common on AMD / some Intel boards)
+  # ── 2) hwmon power sensors fallback ────────────────────────────────────
+  # Some AMD boards or Intel boards expose CPU power through hwmon.
   sum="0"
   got=0
   for d in /sys/class/hwmon/hwmon*; do
     [ -d "$d" ] || continue
     for f in "$d"/power1_average "$d"/power1_input; do
-      [ -r "$f" ] || continue
-      raw="$(cat "$f" 2>/dev/null)"
+      [ -e "$f" ] || continue
+      raw="$(_read_sysfs "$f")" || continue
       [[ "$raw" =~ ^[0-9]+$ ]] || continue
       sum="$(awk -v s="$sum" -v u="$raw" 'BEGIN{printf "%.6f", s + (u/1000000)}')"
       got=1
-      break
+      break   # one power reading per hwmon device
     done
   done
   if [ "$got" -eq 1 ]; then
@@ -157,35 +154,66 @@ get_cpu_power_w() {
     return 0
   fi
 
-  # 4) sensors PPT fallback
-  raw="$(sensors 2>/dev/null | awk '
-    /^[[:space:]]*PPT:/ {
-      v=$2
-      gsub(/\+|W/, "", v)
-      if (v ~ /^[0-9.]+$/) { print v; exit }
-    }
-  ')"
-  if [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    printf "%.2f" "$raw"
-    return 0
+  # ── 3) sensors command fallback (lm-sensors) ──────────────────────────
+  # Parse power from sensors output.  Skip GPU sections (amdgpu/nvidia)
+  # to avoid double-counting GPU power.
+  # Recognises: PPT, power1, SVI2_P_Core, SVI2_P_SoC
+  if command -v sensors &>/dev/null; then
+    raw="$(sensors 2>/dev/null | awk '
+      /^[a-zA-Z]/ { section = $0 }
+      section ~ /amdgpu|nvidia/ { next }
+      /^[[:space:]]*(PPT|power1|SVI2_P_Core|SVI2_P_SoC):/ {
+        for (i=2; i<=NF; i++) {
+          v = $i
+          gsub(/[+W]/, "", v)
+          if (v ~ /^[0-9]+(\.[0-9]+)?$/) { s += v; n++; break }
+        }
+      }
+      END { if (n > 0) printf "%.2f", s }
+    ')"
+    if [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      printf "%.2f" "$raw"
+      return 0
+    fi
   fi
 
   echo "N/A"
 }
 
+# GPU count stored globally for display
+GPU_COUNT=0
+
 get_gpu_power_w() {
-  nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | awk '
+  local result
+  result="$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | awk '
     {
       gsub(/\r/, "", $0)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
       if ($0 ~ /^[0-9]+([.][0-9]+)?$/) { s += $0; n++ }
     }
-    END { if (n>0) printf "%.2f", s; else print "N/A" }
-  '
+    END { if (n>0) printf "%d %.2f", n, s; else print "0 N/A" }
+  ')"
+  GPU_COUNT="${result%% *}"
+  echo "${result#* }"
+}
+
+# ── Get CPU temp (works for Intel "Package id" and AMD "Tctl"/"Tdie") ────
+get_cpu_temp() {
+  if command -v sensors &>/dev/null; then
+    sensors 2>/dev/null | awk '
+      /Package id|Tctl|Tdie/ {
+        for (i=1; i<=NF; i++) {
+          if ($i ~ /^\+[0-9]/) { print $i; exit }
+        }
+      }
+    '
+  fi
 }
 
 CPU_POWER_W="$(get_cpu_power_w)"
 GPU_POWER_W="$(get_gpu_power_w)"
+CPU_TEMP="$(get_cpu_temp)"
+[ -z "$CPU_TEMP" ] && CPU_TEMP="N/A"
 
 TOTAL_POWER_W="$(awk -v c="$CPU_POWER_W" -v g="$GPU_POWER_W" '
 BEGIN {
@@ -198,7 +226,15 @@ BEGIN {
 }')"
 
 if is_num "$CPU_POWER_W"; then CPU_POWER_DISP="${CPU_POWER_W}W"; else CPU_POWER_DISP="N/A"; fi
-if is_num "$GPU_POWER_W"; then GPU_POWER_DISP="${GPU_POWER_W}W"; else GPU_POWER_DISP="N/A"; fi
+if is_num "$GPU_POWER_W"; then
+  if [ "$GPU_COUNT" -le 1 ]; then
+    GPU_POWER_DISP="${GPU_POWER_W}W"
+  else
+    GPU_POWER_DISP="${GPU_POWER_W}W (${GPU_COUNT} GPUs)"
+  fi
+else
+  GPU_POWER_DISP="N/A"
+fi
 if is_num "$TOTAL_POWER_W"; then TOTAL_POWER_DISP="${TOTAL_POWER_W}W"; else TOTAL_POWER_DISP="N/A"; fi
 #--- END POWER CALCS ---
 #--- BEGIN SYSTEM SPECS ---
@@ -211,7 +247,7 @@ echo "Kernel: $(uname -r) -- Ubuntu: $(cat /etc/os-release 2>/dev/null | grep PR
 echo "$(grep "model name" /proc/cpuinfo | head -n1 | cut -d: -f2- | xargs) CPU Cores / Threads: $(nproc) cores, $(grep -c ^processor /proc/cpuinfo) threads" && \
 echo "CPU Frequency: $(awk '/cpu MHz/ {sum+=$4; count++} END {printf "%.1f GHz", sum/count/1000}' /proc/cpuinfo) -- Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "N/A")" && \
 echo "CPU Utilization: $(top -bn1 | grep "Cpu(s)" | awk '{print $2+$4 "% used"}') -- CPU Load Average% (60/120/180 min): $(uptime | awk -F'load average: ' '{print $2}')" && \
-echo "CPU Temp: $(sensors 2>/dev/null | grep -m1 "Package id" | awk '{print $4}' || echo "N/A") -- CPU Power: ${CPU_POWER_DISP} -- GPU(s) Power: ${GPU_POWER_DISP} -- Total Power (GPU+CPU): ${TOTAL_POWER_DISP}" && \
+echo "CPU Temp: ${CPU_TEMP} -- CPU Power: ${CPU_POWER_DISP} -- GPU Power: ${GPU_POWER_DISP} -- Total Power: ${TOTAL_POWER_DISP}" && \
 echo "System Temperatures: $(sensors 2>/dev/null | grep -E 'Core|nvme|temp1' | head -n 5 | awk '{print $1 $2 " " $3}' | tr '\n' ' ' || echo "N/A")" && \
 echo "RAID Status: $(cat /proc/mdstat 2>/dev/null | head -n1 || echo "No software RAID detected")" && \
 echo "Root Disk (/): $(df -h / | awk 'NR==2 {print $2 " total, " $4 " available"}') -- Drive Type (sda): $( [ "$(cat /sys/block/sda/queue/rotational 2>/dev/null)" = "0" ] && echo "SSD" || echo "HDD or N/A") -- Filesystem Types: $(cat /proc/mounts 2>/dev/null | grep -E 'ext4|xfs|btrfs' | awk '{print $3}' | sort | uniq | tr '\n' ', ' | sed 's/, $//')" && \
