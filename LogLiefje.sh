@@ -1,6 +1,6 @@
 #!/bin/bash
 echo ""
-echo "v0.00.25"   # ← incremented
+echo "v0.00.26"   # ← incremented
 echo > mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -21,12 +21,17 @@ CONFIG_FILE="$HOME/.logliefje_name"
 docker logs -t -f nosana-node 2>&1 \
 | head -n 30 \
 | awk '
-  { gsub(/\r/, "", $0) }
+  {
+    gsub(/\r/, "", $0)
+    gsub(/\033\[[0-9;]*[[:alpha:]]/, "", $0)  # remove ANSI escapes
+  }
   /Wallet:/ { wallet=$NF }
   /Grid recommended/ {
     for (i=1; i<=NF; i++) if ($i=="recommended") market=$(i+1)
   }
   END {
+    if (wallet!="") gsub(/[^1-9A-HJ-NP-Za-km-z]/, "", wallet)
+    if (market!="") gsub(/[^1-9A-HJ-NP-Za-km-z]/, "", market)
     if (wallet=="") wallet="N/A"
     if (market=="") market="N/A"
     print "Host: https://explore.nosana.com/hosts/" wallet " (from latest log)"
