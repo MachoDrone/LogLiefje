@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.30">> mylog.txt   # ← incremented
+echo "log collector v0.00.31">> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -216,14 +216,14 @@ fi
 #--- END NVIDIA SMI ---
 echo "">> mylog.txt
 #--- BEGIN DOCKER COMMANDS ---
-docker exec podman podman -v >> mylog.txt
+docker exec podman podman -v>> mylog.txt
 docker exec podman podman ps>> mylog.txt
 echo "">> mylog.txt
 echo "docker exec podman podman ps -a">> mylog.txt
 docker exec podman podman ps -a>> mylog.txt
 echo "">> mylog.txt
-docker -v >> mylog.txt
-docker ps >> mylog.txt
+docker -v>> mylog.txt
+docker ps>> mylog.txt
 echo "">> mylog.txt
 echo "docker exec podman podman ps -a (COUNT AFTER 5)">> mylog.txt
 ps=$(docker ps -a)
