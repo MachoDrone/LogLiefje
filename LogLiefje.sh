@@ -225,11 +225,22 @@ docker -v>> mylog.txt
 docker ps>> mylog.txt
 echo "">> mylog.txt
 echo "docker exec podman podman ps -a (COUNT AFTER 20)">> mylog.txt
-{
-  ps=$(docker ps -a)
-  echo "$ps" | head -n 21 #add one additional number to count the docker header
-  echo "*** Plus $(( $(echo "$ps" | wc -l) - 20 < 0 ? 0 : $(echo "$ps" | wc -l) - 21 )) more containers ***" #add one additional number to count the docker header
-} >> mylog.txt
+echo "">> mylog.txt
+MAX_SHOW=20
+PODMAN_PS_ALL="$(docker exec podman podman ps -a 2>/dev/null || true)"
+
+if [ -n "$PODMAN_PS_ALL" ]; then
+  TOTAL_CONTAINERS="$(printf '%s\n' "$PODMAN_PS_ALL" | awk 'NR>1 && NF{c++} END{print c+0}')"
+  NOT_SHOWN=$(( TOTAL_CONTAINERS > MAX_SHOW ? TOTAL_CONTAINERS - MAX_SHOW : 0 ))
+
+  {
+    echo "docker exec podman podman ps -a (${TOTAL_CONTAINERS} total, ${NOT_SHOWN} not shown)"
+    printf '%s\n' "$PODMAN_PS_ALL" | head -n $((MAX_SHOW + 1))   # header + first 20 rows
+    echo "*** Plus ${NOT_SHOWN} more containers ***"
+  } >> mylog.txt
+else
+  echo "docker exec podman podman ps -a (unavailable)" >> mylog.txt
+fi
 #--- END DOCKER COMMANDS ---
 
 
