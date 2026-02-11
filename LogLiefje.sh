@@ -12,7 +12,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.56" >> mylog.txt   # ← incremented
+echo "log collector v0.00.58" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -706,7 +706,7 @@ fi
 # ================================================
 TEXT_FILE="mylog.txt"   # ← must exist
 
-# ------------- MANA OBFUSCATION (do not change) -------------
+# ------------- mana attitude (do not change) -------------
 mana2=$'\x62'
 mana27=$'\x2D'
 mana25=$'\x6F'
