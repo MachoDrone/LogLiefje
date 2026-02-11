@@ -1,7 +1,7 @@
 #!/bin/bash
 clear
 echo > mylog.txt
-echo "log collector v0.00.53" >> mylog.txt   # ← incremented
+echo "log collector v0.00.54" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -48,8 +48,8 @@ echo "Collecting logs..."
 NOS_MINT="nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7"
 SOLANA_RPC="https://api.mainnet-beta.solana.com"
 
-# Strip ANSI escape codes from piped input
-_strip_ansi() { awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[[:alpha:]]/,""); print }'; }
+# Strip ANSI escape codes and control chars from piped input
+_strip_ansi() { awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[[:alpha:]]/,""); print }' | tr -d '\033\000-\010\013\014\016-\037\177'; }
 
 # Find all nosana containers (matches "nosana" anywhere in container name)
 NODE_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'nosana' | sort)"
@@ -580,11 +580,12 @@ fi
 _clean_docker_log() {
   perl -pe '
     s/\e\[\??[0-9;]*[a-zA-Z]//g;
+    s/\e//g;
     s/.*([✔✖])/$1/;
     s/.*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*/  / unless /[✔✖]/;
     $_ = substr($_, 0, 300) . "...\n" if length($_) > 300;
     $_ = "" if /^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*$/;
-  ' | grep -av '^\s*$'
+  ' | tr -d '\000-\010\013\014\016-\037\177' | grep -v '^\s*$'
 }
 
 MAX_FILE_BYTES=1073741824
@@ -655,6 +656,8 @@ if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
 
   # ── Write navigation header + logs per container ────────────────────────
   {
+    echo ""
+    echo ""
     echo ""
     echo "========================================================================"
     echo "NOSANA CONTAINER LOGS (${NUM_LOG_CONTAINERS} containers)"
