@@ -1,7 +1,18 @@
 #!/bin/bash
+
+# ── Dependency check: install jq if missing ──────────────────────────────
+if ! command -v jq &>/dev/null; then
+  echo "Installing jq (required for JSON parsing)..."
+  sudo apt-get update -qq && sudo apt-get install -y -qq jq 2>/dev/null
+  if ! command -v jq &>/dev/null; then
+    echo "Error: jq is required but could not be installed. Please run: sudo apt-get install jq"
+    exit 1
+  fi
+fi
+
 clear
 echo > mylog.txt
-echo "log collector v0.00.54" >> mylog.txt   # ← incremented
+echo "log collector v0.00.55" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
