@@ -1,7 +1,7 @@
 #!/bin/bash
 clear
 echo > mylog.txt
-echo "log collector v0.00.49" >> mylog.txt   # ← incremented
+echo "log collector v0.00.50" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -38,7 +38,7 @@ SAFE_NAME=$(echo "$DISCORD_NAME" | tr -cd 'a-zA-Z0-9._-')
 UTC_TS=$(date -u +%Y%m%d_%H%M%SZ)
 SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
 
-echo "Collecting system data..."
+echo "Collecting logs..."
 
 # ================================================
 # === DATA COLLECTION (silent, to mylog.txt) =====
@@ -570,6 +570,99 @@ else
   echo "docker ps -a (unavailable)" >> mylog.txt
 fi
 #--- END DOCKER COMMANDS ---
+
+#--- BEGIN NOSANA NODE LOG TAILS (budget-distributed, ANSI-stripped) ---
+# Collects the tail of each nosana container's docker logs.
+# Distributes available space fairly: short logs get all their lines,
+# leftover budget flows to longer containers.
+# Max file target: 1GB (Litterbox limit).
+
+_clean_docker_log() {
+  # Strip ANSI escapes, handle \r overwrites (spinners/progress), remove
+  # orphaned color fragments, strip non-printable chars, truncate long lines.
+  awk '{
+    gsub(/\033\[[0-9;?]*[[:alpha:]]/, "")
+    n = split($0, parts, "\r")
+    $0 = parts[n]
+    gsub(/\[?[0-9;]*m/, "")
+    gsub(/[^[:print:]\t]/, "")
+    if (length($0) > 300) $0 = substr($0, 1, 297) "..."
+    if ($0 !~ /^[[:space:]]*$/) print
+  }'
+}
+
+MAX_FILE_BYTES=1073741824
+CURRENT_SIZE=$(wc -c < mylog.txt)
+REMAINING=$((MAX_FILE_BYTES - CURRENT_SIZE - 10000))   # 10K safety margin
+BYTES_PER_LINE=250   # average cleaned log line ~250 bytes
+MAX_TOTAL_LINES=$((REMAINING / BYTES_PER_LINE))
+
+LOG_CONTAINERS=()
+declare -A LOG_TOTAL_LINES
+for _lc in $(docker ps --format '{{.Names}}' 2>/dev/null | grep nosana | sort); do
+  LOG_CONTAINERS+=("$_lc")
+done
+
+NUM_LOG_CONTAINERS=${#LOG_CONTAINERS[@]}
+
+if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
+  # ── Pass 1: count lines per container ──────────────────────────────────
+  echo ""
+  _total_all=0
+  _pass=0
+  for _lc in "${LOG_CONTAINERS[@]}"; do
+    _pass=$((_pass + 1))
+    printf "  scan pass 1 of 2 on %s (%d/%d)...\r" "$_lc" "$_pass" "$NUM_LOG_CONTAINERS"
+    LOG_TOTAL_LINES[$_lc]=$(docker logs "$_lc" 2>&1 | wc -l)
+    _total_all=$((_total_all + LOG_TOTAL_LINES[$_lc]))
+  done
+  printf "  scan pass 1 of 2 complete: %d total lines across %d containers\n" "$_total_all" "$NUM_LOG_CONTAINERS"
+
+  # ── Calculate fair distribution ────────────────────────────────────────
+  SHARE=$((MAX_TOTAL_LINES / NUM_LOG_CONTAINERS))
+  declare -A LOG_ALLOC
+  LEFTOVER=0
+
+  # First: cap short containers, accumulate leftover
+  for _lc in "${LOG_CONTAINERS[@]}"; do
+    if [ "${LOG_TOTAL_LINES[$_lc]}" -le "$SHARE" ]; then
+      LOG_ALLOC[$_lc]="${LOG_TOTAL_LINES[$_lc]}"
+      LEFTOVER=$((LEFTOVER + SHARE - LOG_TOTAL_LINES[$_lc]))
+    else
+      LOG_ALLOC[$_lc]="$SHARE"
+    fi
+  done
+
+  # Second: redistribute leftover to containers that need more
+  LONG_CONTAINERS=0
+  for _lc in "${LOG_CONTAINERS[@]}"; do
+    [ "${LOG_TOTAL_LINES[$_lc]}" -gt "$SHARE" ] && LONG_CONTAINERS=$((LONG_CONTAINERS + 1))
+  done
+
+  if [ "$LONG_CONTAINERS" -gt 0 ] && [ "$LEFTOVER" -gt 0 ]; then
+    BONUS=$((LEFTOVER / LONG_CONTAINERS))
+    for _lc in "${LOG_CONTAINERS[@]}"; do
+      if [ "${LOG_TOTAL_LINES[$_lc]}" -gt "$SHARE" ]; then
+        LOG_ALLOC[$_lc]=$((LOG_ALLOC[$_lc] + BONUS))
+        [ "${LOG_ALLOC[$_lc]}" -gt "${LOG_TOTAL_LINES[$_lc]}" ] && LOG_ALLOC[$_lc]="${LOG_TOTAL_LINES[$_lc]}"
+      fi
+    done
+  fi
+
+  # ── Pass 2: collect logs with calculated tail per container ────────────
+  _pass=0
+  for _lc in "${LOG_CONTAINERS[@]}"; do
+    _pass=$((_pass + 1))
+    printf "  scan pass 2 of 2 on %s (%d/%d) - collecting %s of %s lines...\r" \
+      "$_lc" "$_pass" "$NUM_LOG_CONTAINERS" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
+    {
+      printf "\n\n\n%s: (showing %s of %s lines)\n" "$_lc" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
+      docker logs -t --tail "${LOG_ALLOC[$_lc]}" "$_lc" 2>&1 | _clean_docker_log
+    } >> mylog.txt
+  done
+  printf "  scan pass 2 of 2 complete: logs collected                                  \n"
+fi
+#--- END NOSANA NODE LOG TAILS ---
 
 # ================================================
 # === UPLOAD AND DISPLAY =========================
