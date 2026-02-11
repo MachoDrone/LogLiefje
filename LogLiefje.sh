@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.44" >> mylog.txt   # ← incremented
+echo "log collector v0.00.45" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -25,8 +25,8 @@ SOLANA_RPC="https://api.mainnet-beta.solana.com"
 # Strip ANSI escape codes from piped input
 _strip_ansi() { awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[[:alpha:]]/,""); print }'; }
 
-# Find all nosana containers (handles: nosana-node, nosana-node.gpu0, etc.)
-NODE_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^nosana' | sort)"
+# Find all nosana containers (matches "nosana" anywhere in container name)
+NODE_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'nosana' | sort)"
 
 if [ -z "$NODE_CONTAINERS" ]; then
   {
@@ -56,8 +56,8 @@ else
 
     # Markets: only capture once per unique wallet
     if [ -z "${W_FM[$w]+x}" ]; then
-      # First market from HEAD of log (startup, first 30 lines)
-      fm="$(docker logs "$c" 2>&1 | head -n 30 | _strip_ansi \
+      # First market from HEAD of log (first occurrence in first 5000 lines; awk exits at first match)
+      fm="$(docker logs "$c" 2>&1 | head -n 5000 | _strip_ansi \
           | awk '/Grid recommended/{for(i=1;i<=NF;i++) if($i=="recommended"){print $(i+1);exit}}' \
           | tr -cd '1-9A-HJ-NP-Za-km-z')"
       # Last market from TAIL of log (most recent, searched bottom-up)
@@ -291,6 +291,31 @@ else
   GPU_POWER_DISP="N/A"
 fi
 if is_num "$TOTAL_POWER_W"; then TOTAL_POWER_DISP="${TOTAL_POWER_W}W"; else TOTAL_POWER_DISP="N/A"; fi
+
+# ── Power limits (PL1=sustained/RMS, PL2=burst/max) from RAPL sysfs ─────
+CPU_PL1_RAW="$(_read_sysfs /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw)" 2>/dev/null
+CPU_PL2_RAW="$(_read_sysfs /sys/class/powercap/intel-rapl:0/constraint_1_power_limit_uw)" 2>/dev/null
+GPU_MAX_W="$(nvidia-smi --query-gpu=power.limit --format=csv,noheader,nounits 2>/dev/null \
+  | awk '{s+=$1} END{if(NR>0) printf "%.0f", s}')"
+
+CPU_PL1_W=""; CPU_PL2_W=""
+[[ "$CPU_PL1_RAW" =~ ^[0-9]+$ ]] && CPU_PL1_W="$(awk -v v="$CPU_PL1_RAW" 'BEGIN{printf "%.0f", v/1000000}')"
+[[ "$CPU_PL2_RAW" =~ ^[0-9]+$ ]] && CPU_PL2_W="$(awk -v v="$CPU_PL2_RAW" 'BEGIN{printf "%.0f", v/1000000}')"
+
+# CPU Max = PL2 if available, else PL1
+CPU_MAX_W="${CPU_PL2_W:-$CPU_PL1_W}"
+
+# Build display: CPU RMS (PL1) | CPU Max (PL2) | GPU Max | Total Peak | Possible Peak (+100W overhead)
+POWER_LIMITS_DISP=""
+[ -n "$CPU_PL1_W" ] && POWER_LIMITS_DISP="CPU RMS: ${CPU_PL1_W}W"
+[ -n "$CPU_MAX_W" ] && POWER_LIMITS_DISP="${POWER_LIMITS_DISP:+$POWER_LIMITS_DISP | }CPU Max: ${CPU_MAX_W}W"
+[ -n "$GPU_MAX_W" ] && POWER_LIMITS_DISP="${POWER_LIMITS_DISP:+$POWER_LIMITS_DISP | }GPU Max: ${GPU_MAX_W}W"
+if [ -n "$CPU_MAX_W" ] && [ -n "$GPU_MAX_W" ]; then
+  TOTAL_PEAK_W=$(( CPU_MAX_W + GPU_MAX_W ))
+  POSSIBLE_PEAK_W=$(( TOTAL_PEAK_W + 100 ))   # +100W for mobo, RAM, drives, fans
+  POWER_LIMITS_DISP="${POWER_LIMITS_DISP} | Total Peak: ${TOTAL_PEAK_W}W | Possible Peak: ${POSSIBLE_PEAK_W}W"
+fi
+[ -z "$POWER_LIMITS_DISP" ] && POWER_LIMITS_DISP="N/A"
 #--- END POWER CALCS ---
 #--- BEGIN SYSTEM SPECS ---
 (
@@ -305,6 +330,7 @@ echo "$(grep "model name" /proc/cpuinfo | head -n1 | cut -d: -f2- | xargs) CPU C
 echo "CPU Frequency: $(awk '/cpu MHz/ {sum+=$4; count++} END {printf "%.1f GHz", sum/count/1000}' /proc/cpuinfo) -- Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "N/A")" && \
 echo "CPU Utilization: $(top -bn1 | grep "Cpu(s)" | awk '{print $2+$4 "% used"}') -- CPU Load Average% (60/120/180 min): $(uptime | awk -F'load average: ' '{print $2}')" && \
 echo "CPU Temp: ${CPU_TEMP} -- CPU Power: ${CPU_POWER_DISP} -- GPU Power: ${GPU_POWER_DISP} -- Total Power: ${TOTAL_POWER_DISP}" && \
+echo "Power Limits: ${POWER_LIMITS_DISP}" && \
 echo "System Temperatures: $(sensors 2>/dev/null | grep -E 'Core|nvme|temp1' | head -n 5 | awk '{print $1 $2 " " $3}' | tr '\n' ' ' || echo "N/A")" && \
 echo "RAID Status: $(cat /proc/mdstat 2>/dev/null | head -n1 || echo "No software RAID detected")" && \
 echo "Root Disk (/): $(df -h / | awk 'NR==2 {print $2 " total, " $4 " available"}') -- Drive Type (sda): $( [ "$(cat /sys/block/sda/queue/rotational 2>/dev/null)" = "0" ] && echo "SSD" || echo "HDD or N/A") -- Filesystem Types: $(cat /proc/mounts 2>/dev/null | grep -E 'ext4|xfs|btrfs' | awk '{print $3}' | sort | uniq | tr '\n' ', ' | sed 's/, $//')" && \
