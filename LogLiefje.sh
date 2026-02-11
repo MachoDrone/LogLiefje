@@ -1,11 +1,8 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.47" >> mylog.txt   # ← incremented
+echo "log collector v0.00.48" >> mylog.txt   # ← incremented
 cat mylog.txt
-# ================================================
-# Upload to Litterbox + Notify Slack Template
-# ================================================
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
 CHANNEL_ID="C093HNDQ422"
@@ -13,9 +10,38 @@ USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
 CONFIG_FILE="$HOME/.logliefje_name"
 
+# ------------- DISCORD NAME PROMPT (early, before collection) -------------
+SAVED_NAME=""
+if [[ -f "$CONFIG_FILE" ]]; then
+    SAVED_NAME=$(<"$CONFIG_FILE")
+fi
+
+if [[ -n "$SAVED_NAME" ]]; then
+    printf "\033[1;34mEnter Discord Name for support reference [%s]: \033[0m" "$SAVED_NAME"
+else
+    printf "\033[1;34mEnter Discord Name for support reference: \033[0m"
+fi
+read -r DISCORD_NAME
+
+if [[ -z "$DISCORD_NAME" && -n "$SAVED_NAME" ]]; then
+    DISCORD_NAME="$SAVED_NAME"
+elif [[ -z "$DISCORD_NAME" ]]; then
+    echo "Error: Discord name is required!"
+    exit 1
+fi
+
+# Save for future use
+echo "$DISCORD_NAME" > "$CONFIG_FILE"
+
+# Sanitize name for filename
+SAFE_NAME=$(echo "$DISCORD_NAME" | tr -cd 'a-zA-Z0-9._-')
+UTC_TS=$(date -u +%Y%m%d_%H%M%SZ)
+SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
+
+echo "Collecting system data..."
+
 # ================================================
-# === YOUR CODE GOES HERE ========================
-# Create / prepare your .txt file in this section
+# === DATA COLLECTION (silent, to mylog.txt) =====
 # ================================================
 
 #--- THE WALLET, MARKET RECOMMENDATIONS, AND LIVE BALANCES ---
@@ -30,10 +56,10 @@ NODE_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'nosana' |
 
 if [ -z "$NODE_CONTAINERS" ]; then
   {
-      echo "Host: N/A (no nosana containers found)"
+    echo "Host: N/A (no nosana containers found)"
     echo "First Market Recommended: N/A"
     echo "Last Market Recommended: N/A"
-  } | tee -a mylog.txt
+  } >> mylog.txt
 else
   # Track unique wallets and which containers share them
   declare -A W_CTRS W_FM W_LM
@@ -103,7 +129,7 @@ else
     fi
 
     echo "Live Balances: SOL: ${sol_disp} | NOS: ${nos_disp} | Staked: ${stk_disp}"
-  done | tee -a mylog.txt
+  done >> mylog.txt
 fi
 #--- END WALLET, MARKET, AND BALANCES ---
 
@@ -347,7 +373,7 @@ echo "Firewall: $( (ufw status 2>/dev/null | head -n1 | grep -q "Status:" && ufw
 echo "Nearest Solana RPC Latency: $(curl -s --max-time 5 -w "%{time_total}" -o /dev/null https://api.mainnet-beta.solana.com | awk '{printf "%.0f ms", $1*1000}' || echo "N/A")" && \
 echo "Latency (Google DNS):" && \
 ping -c 4 8.8.8.8 | tail -n 2
-) | tee -a mylog.txt
+) >> mylog.txt
 
 # ── Uptimes (PC + nosana containers) ─────────────────────────────────────
 {
@@ -362,7 +388,7 @@ docker ps --format '{{.Names}}' 2>/dev/null | grep nosana | sort | while read -r
   _d=$((_diff/86400)); _h=$(((_diff%86400)/3600)); _m=$(((_diff%3600)/60))
   printf "  %-35s %s\n" "${_d} days, ${_h} hours, ${_m} minutes (since ${_start})" "$_c"
 done
-} | tee -a mylog.txt
+} >> mylog.txt
 #--- END SYSTEM SPECS ---
 
 echo "" >> mylog.txt
@@ -546,37 +572,9 @@ fi
 #--- END DOCKER COMMANDS ---
 
 # ================================================
-# === DO NOT EDIT BELOW THIS LINE ================
+# === UPLOAD AND DISPLAY =========================
 # ================================================
 TEXT_FILE="mylog.txt"   # ← must exist
-
-# ------------- DISCORD NAME PROMPT -------------
-SAVED_NAME=""
-if [[ -f "$CONFIG_FILE" ]]; then
-    SAVED_NAME=$(<"$CONFIG_FILE")
-fi
-
-if [[ -n "$SAVED_NAME" ]]; then
-    printf "\033[1;34mEnter Discord Name for support reference [%s]: \033[0m" "$SAVED_NAME"
-else
-    printf "\033[1;34mEnter Discord Name for support reference: \033[0m"
-fi
-read -r DISCORD_NAME
-
-if [[ -z "$DISCORD_NAME" && -n "$SAVED_NAME" ]]; then
-    DISCORD_NAME="$SAVED_NAME"
-elif [[ -z "$DISCORD_NAME" ]]; then
-    echo "Error: Discord name is required!"
-    exit 1
-fi
-
-# Save for future use
-echo "$DISCORD_NAME" > "$CONFIG_FILE"
-
-# Sanitize name for filename (keep only alphanumeric, dots, hyphens, underscores)
-SAFE_NAME=$(echo "$DISCORD_NAME" | tr -cd 'a-zA-Z0-9._-')
-UTC_TS=$(date -u +%Y%m%d_%H%M%SZ)
-SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
 
 # ------------- MANA OBFUSCATION (do not change) -------------
 mana2=$'\x62'
@@ -675,3 +673,5 @@ else
 fi
 
 echo "Done!"
+echo ""
+cat mylog.txt
