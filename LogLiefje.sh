@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.41" >> mylog.txt   # ← incremented
+echo "log collector v0.00.42" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -419,7 +419,7 @@ docker exec podman sh -c '
   for cid in $(podman ps -q --filter "name=^frpc"); do
     name=$(podman inspect --format "{{.Name}}" "$cid")
     echo "========== Logs for $name ($cid) =========="
-    podman logs "$cid"
+    podman logs "$cid" | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?) ?[mGK]//g"
     echo "==========================================="
   done
 ' >> mylog.txt
