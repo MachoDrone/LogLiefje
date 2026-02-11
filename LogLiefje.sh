@@ -693,7 +693,7 @@ fi
 # ================================================
 TEXT_FILE="mylog.txt"   # ← must exist
 
-# ------------- MANA OBFUSCATION (do not change) -------------
+# ------------- mañana attitude (do not change) -------------
 mana2=$'\x62'
 mana27=$'\x2D'
 mana25=$'\x6F'
