@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.39" >> mylog.txt   # ← incremented
+echo "log collector v0.00.40" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -412,6 +412,16 @@ docker exec podman podman ps >> mylog.txt
 echo "" >> mylog.txt
 echo "docker exec podman podman ps -a" >> mylog.txt
 docker exec podman podman ps -a >> mylog.txt
+echo "" >> mylog.txt
+echo "frps logs"
+docker exec podman sh -c '
+  for cid in $(podman ps -q --filter "name=^frpc"); do
+    name=$(podman inspect --format "{{.Name}}" "$cid")
+    echo "========== Logs for $name ($cid) =========="
+    podman logs "$cid"
+    echo "==========================================="
+  done
+'
 echo "" >> mylog.txt
 docker -v >> mylog.txt
 docker ps >> mylog.txt
