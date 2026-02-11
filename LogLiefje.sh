@@ -1,5 +1,6 @@
 #!/bin/bash
-
+#--use: bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje.sh)
+# --cache-buster: bash <(wget -qO- "https://raw.githubusercontent.com/MachoDrone/LogLiefje/main/LogLiefje.sh?$(date +%s)")
 # ── Dependency check: install jq if missing ──────────────────────────────
 if ! command -v jq &>/dev/null; then
   echo "Installing jq (required for JSON parsing)..."
