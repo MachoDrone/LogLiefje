@@ -1,7 +1,7 @@
 #!/bin/bash
 clear
 echo > mylog.txt
-echo "log collector v0.00.51" >> mylog.txt   # ← incremented
+echo "log collector v0.00.53" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -571,100 +571,117 @@ else
 fi
 #--- END DOCKER COMMANDS ---
 
-#--- BEGIN NOSANA NODE LOG TAILS (budget-distributed, ANSI-stripped) ---
-# Collects the tail of each nosana container's docker logs.
-# Distributes available space fairly: short logs get all their lines,
-# leftover budget flows to longer containers.
-# Max file target: 1GB (Litterbox limit).
+#--- BEGIN NOSANA NODE LOG TAILS (budget-distributed, cleaned) ---
+# Collects stdout-only docker logs (2>/dev/null skips stderr spinners).
+# Cleans with perl: strips ANSI, collapses spinner repetitions to last
+# status, truncates long lines, removes timestamp-only blanks.
+# Distributes available space fairly across containers (1GB max).
 
 _clean_docker_log() {
-  # Strip ANSI escapes, handle \r overwrites (spinners/progress), remove
-  # orphaned color fragments, strip non-printable chars, truncate long lines.
-  awk '{
-    gsub(/\033\[[0-9;?]*[[:alpha:]]/, "")
-    n = split($0, parts, "\r")
-    $0 = parts[n]
-    gsub(/\[?[0-9;]*m/, "")
-    gsub(/[^[:print:]\t]/, "")
-    if (length($0) > 300) $0 = substr($0, 1, 297) "..."
-    if ($0 !~ /^[[:space:]]*$/) print
-  }'
+  perl -pe '
+    s/\e\[\??[0-9;]*[a-zA-Z]//g;
+    s/.*([✔✖])/$1/;
+    s/.*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*/  / unless /[✔✖]/;
+    $_ = substr($_, 0, 300) . "...\n" if length($_) > 300;
+    $_ = "" if /^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*$/;
+  ' | grep -av '^\s*$'
 }
 
 MAX_FILE_BYTES=1073741824
 CURRENT_SIZE=$(wc -c < mylog.txt)
-REMAINING=$((MAX_FILE_BYTES - CURRENT_SIZE - 10000))   # 10K safety margin
-BYTES_PER_LINE=250   # average cleaned log line ~250 bytes
+REMAINING=$((MAX_FILE_BYTES - CURRENT_SIZE - 10000))
+BYTES_PER_LINE=200
 MAX_TOTAL_LINES=$((REMAINING / BYTES_PER_LINE))
+HEAD_LINES=30
 
 LOG_CONTAINERS=()
-declare -A LOG_TOTAL_LINES
 for _lc in $(docker ps --format '{{.Names}}' 2>/dev/null | grep nosana | sort); do
   LOG_CONTAINERS+=("$_lc")
 done
-
 NUM_LOG_CONTAINERS=${#LOG_CONTAINERS[@]}
 
 if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
-  # ── Pass 1: count CLEANED lines per container ─────────────────────────
-  # Raw line counts are useless (spinner frames inflate to 170K+ "lines"
-  # that collapse to ~1 line after cleanup).  Count post-cleanup lines.
   echo ""
+  declare -A LOG_TOTAL_LINES LOG_TMPFILES
   _total_all=0
   _pass=0
+
+  # ── Single scan: clean once to temp file, count from temp ──────────────
   for _lc in "${LOG_CONTAINERS[@]}"; do
     _pass=$((_pass + 1))
-    printf "  scan pass 1 of 2: counting cleaned lines on %s (%d/%d)...\r" "$_lc" "$_pass" "$NUM_LOG_CONTAINERS"
-    LOG_TOTAL_LINES[$_lc]=$(docker logs -t "$_lc" 2>&1 | _clean_docker_log | wc -l)
+    printf "  scanning %s (%d/%d)...\r" "$_lc" "$_pass" "$NUM_LOG_CONTAINERS"
+    _tmplog=$(mktemp)
+    docker logs -t "$_lc" 2>/dev/null | _clean_docker_log > "$_tmplog"
+    LOG_TMPFILES[$_lc]="$_tmplog"
+    LOG_TOTAL_LINES[$_lc]=$(wc -l < "$_tmplog")
     _total_all=$((_total_all + LOG_TOTAL_LINES[$_lc]))
   done
-  printf "  scan pass 1 of 2 complete: %d useful lines across %d containers          \n" "$_total_all" "$NUM_LOG_CONTAINERS"
+  printf "  scan complete: %d useful lines across %d containers              \n" "$_total_all" "$NUM_LOG_CONTAINERS"
 
-  # ── Calculate fair distribution ────────────────────────────────────────
-  SHARE=$((MAX_TOTAL_LINES / NUM_LOG_CONTAINERS))
+  # ── Budget: reserve HEAD_LINES per container, distribute rest for tails ─
+  TAIL_BUDGET=$((MAX_TOTAL_LINES - (HEAD_LINES * NUM_LOG_CONTAINERS)))
+  [ "$TAIL_BUDGET" -lt 0 ] && TAIL_BUDGET=0
+  SHARE=$((TAIL_BUDGET / NUM_LOG_CONTAINERS))
   declare -A LOG_ALLOC
   LEFTOVER=0
 
-  # First: cap short containers, accumulate leftover
   for _lc in "${LOG_CONTAINERS[@]}"; do
-    if [ "${LOG_TOTAL_LINES[$_lc]}" -le "$SHARE" ]; then
-      LOG_ALLOC[$_lc]="${LOG_TOTAL_LINES[$_lc]}"
-      LEFTOVER=$((LEFTOVER + SHARE - LOG_TOTAL_LINES[$_lc]))
+    _avail=$((LOG_TOTAL_LINES[$_lc] - HEAD_LINES))
+    [ "$_avail" -lt 0 ] && _avail=0
+    if [ "$_avail" -le "$SHARE" ]; then
+      LOG_ALLOC[$_lc]="$_avail"
+      LEFTOVER=$((LEFTOVER + SHARE - _avail))
     else
       LOG_ALLOC[$_lc]="$SHARE"
     fi
   done
 
-  # Second: redistribute leftover to containers that need more
   LONG_CONTAINERS=0
   for _lc in "${LOG_CONTAINERS[@]}"; do
-    [ "${LOG_TOTAL_LINES[$_lc]}" -gt "$SHARE" ] && LONG_CONTAINERS=$((LONG_CONTAINERS + 1))
+    _avail=$((LOG_TOTAL_LINES[$_lc] - HEAD_LINES))
+    [ "$_avail" -gt "$SHARE" ] && LONG_CONTAINERS=$((LONG_CONTAINERS + 1))
   done
 
   if [ "$LONG_CONTAINERS" -gt 0 ] && [ "$LEFTOVER" -gt 0 ]; then
     BONUS=$((LEFTOVER / LONG_CONTAINERS))
     for _lc in "${LOG_CONTAINERS[@]}"; do
-      if [ "${LOG_TOTAL_LINES[$_lc]}" -gt "$SHARE" ]; then
+      _avail=$((LOG_TOTAL_LINES[$_lc] - HEAD_LINES))
+      if [ "$_avail" -gt "$SHARE" ]; then
         LOG_ALLOC[$_lc]=$((LOG_ALLOC[$_lc] + BONUS))
-        [ "${LOG_ALLOC[$_lc]}" -gt "${LOG_TOTAL_LINES[$_lc]}" ] && LOG_ALLOC[$_lc]="${LOG_TOTAL_LINES[$_lc]}"
+        [ "${LOG_ALLOC[$_lc]}" -gt "$_avail" ] && LOG_ALLOC[$_lc]="$_avail"
       fi
     done
   fi
 
-  # ── Pass 2: clean full logs, then tail the CLEANED output ──────────────
-  # Key: clean FIRST, tail SECOND.  This ensures we get the right number
-  # of useful lines, not raw spinner frames.
-  _pass=0
+  # ── Write navigation header + logs per container ────────────────────────
+  {
+    echo ""
+    echo "========================================================================"
+    echo "NOSANA CONTAINER LOGS (${NUM_LOG_CONTAINERS} containers)"
+    echo "========================================================================"
+    echo "To jump to a specific container log, search for:"
+    for _lc in "${LOG_CONTAINERS[@]}"; do
+      printf "  === %s:    (%d lines)\n" "$_lc" "${LOG_TOTAL_LINES[$_lc]}"
+    done
+    echo "------------------------------------------------------------------------"
+  } >> mylog.txt
+
   for _lc in "${LOG_CONTAINERS[@]}"; do
-    _pass=$((_pass + 1))
-    printf "  scan pass 2 of 2: collecting %s (%d/%d) - %s of %s cleaned lines...\r" \
-      "$_lc" "$_pass" "$NUM_LOG_CONTAINERS" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
+    _tmplog="${LOG_TMPFILES[$_lc]}"
+    printf "  writing %s: head %d + tail %d of %d lines\n" \
+      "$_lc" "$HEAD_LINES" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
     {
-      printf "\n\n\n%s: (showing %s of %s lines)\n" "$_lc" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
-      docker logs -t "$_lc" 2>&1 | _clean_docker_log | tail -n "${LOG_ALLOC[$_lc]}"
+      printf "\n\n\n=== %s: head %d + tail %d of %d cleaned lines ===\n" \
+        "$_lc" "$HEAD_LINES" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
+      echo "--- HEAD (first ${HEAD_LINES} lines) ---"
+      head -n "$HEAD_LINES" "$_tmplog"
+      echo ""
+      echo "--- TAIL (last ${LOG_ALLOC[$_lc]} lines) ---"
+      tail -n "${LOG_ALLOC[$_lc]}" "$_tmplog"
     } >> mylog.txt
+    rm -f "$_tmplog"
   done
-  printf "  scan pass 2 of 2 complete: logs collected                                          \n"
+  echo "  log collection complete"
 fi
 #--- END NOSANA NODE LOG TAILS ---
 
