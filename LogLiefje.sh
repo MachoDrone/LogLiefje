@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.42" >> mylog.txt   # ← incremented
+echo "log collector v0.00.43" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -18,39 +18,92 @@ CONFIG_FILE="$HOME/.logliefje_name"
 # Create / prepare your .txt file in this section
 # ================================================
 
-#--- THE WALLET AND RECOMMENDED MARKET EXTRACTED FROM THE HEAD AND TAIL OF THE LATEST LOG ---
-tmp_log="$(mktemp)"
+#--- THE WALLET, MARKET RECOMMENDATIONS, AND LIVE BALANCES ---
+NOS_MINT="nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7"
+SOLANA_RPC="https://api.mainnet-beta.solana.com"
 
-docker logs --tail 5000 nosana-node 2>&1 \
-| awk '{ gsub(/\r/, "", $0); gsub(/\033\[[0-9;]*[[:alpha:]]/, "", $0); print }' \
-> "$tmp_log"
+# Strip ANSI escape codes from piped input
+_strip_ansi() { awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[[:alpha:]]/,""); print }'; }
 
-wallet="$(awk '/Wallet:/ {print $NF; exit}' "$tmp_log" | tr -cd '1-9A-HJ-NP-Za-km-z')"
+# Find all nosana-node containers (handles: nosana-node, nosana-node.gpu0, etc.)
+NODE_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^nosana-node' | sort)"
 
-first_market="$(awk '
-  /Grid recommended/ {
-    for (i=1; i<=NF; i++) if ($i=="recommended") { print $(i+1); exit }
-  }
-' "$tmp_log" | tr -cd '1-9A-HJ-NP-Za-km-z')"
+if [ -z "$NODE_CONTAINERS" ]; then
+  {
+    echo "Host: N/A (no nosana-node containers found)"
+    echo "First Market Recommended: N/A"
+    echo "Last Market Recommended: N/A"
+  } | tee -a mylog.txt
+else
+  # Track unique wallets and which containers share them
+  declare -A W_CTRS W_FM W_LM
+  declare -a W_ORD
 
-last_market="$(tac "$tmp_log" | awk '
-  /Grid recommended/ {
-    for (i=1; i<=NF; i++) if ($i=="recommended") { print $(i+1); exit }
-  }
-' | tr -cd '1-9A-HJ-NP-Za-km-z')"
+  while IFS= read -r c; do
+    [ -z "$c" ] && continue
 
-[ -z "$wallet" ] && wallet="N/A"
-[ -z "$first_market" ] && first_market="N/A"
-[ -z "$last_market" ] && last_market="N/A"
+    # ── Wallet from HEAD of log (printed once at startup, not in tail) ──
+    w="$(docker logs "$c" 2>&1 | head -n 50 | _strip_ansi \
+       | awk '/Wallet:/{print $NF; exit}' | tr -cd '1-9A-HJ-NP-Za-km-z')"
+    [ -z "$w" ] && w="N/A"
 
-{
-  echo "Host: https://explore.nosana.com/hosts/$wallet (from latest log)"
-  echo "First Market Recommended: $first_market (from the top of latest log)"
-  echo "Last Market Recommended: $last_market (from bottom-up tail 5000)"
-} | tee -a mylog.txt
+    # Collect containers per wallet (dedup)
+    if [ -z "${W_CTRS[$w]+x}" ]; then
+      W_CTRS[$w]="$c"; W_ORD+=("$w")
+    else
+      W_CTRS[$w]="${W_CTRS[$w]}, $c"
+    fi
 
-rm -f "$tmp_log"
-#--- END WALLET AND RECOMMENDED MARKET ---
+    # Markets: only capture once per unique wallet
+    if [ -z "${W_FM[$w]+x}" ]; then
+      tmp_tail="$(docker logs --tail 5000 "$c" 2>&1 | _strip_ansi)"
+      fm="$(echo "$tmp_tail" | awk '/Grid recommended/{for(i=1;i<=NF;i++) if($i=="recommended"){print $(i+1);exit}}' \
+          | tr -cd '1-9A-HJ-NP-Za-km-z')"
+      lm="$(echo "$tmp_tail" | tac \
+          | awk '/Grid recommended/{for(i=1;i<=NF;i++) if($i=="recommended"){print $(i+1);exit}}' \
+          | tr -cd '1-9A-HJ-NP-Za-km-z')"
+      W_FM[$w]="${fm:-N/A}"
+      W_LM[$w]="${lm:-N/A}"
+    fi
+  done <<< "$NODE_CONTAINERS"
+
+  # ── Print each unique wallet with live RPC balances ──────────────────
+  for w in "${W_ORD[@]}"; do
+    echo "Host: https://explore.nosana.com/hosts/$w (${W_CTRS[$w]})"
+    echo "First Market Recommended: ${W_FM[$w]}"
+    echo "Last Market Recommended:  ${W_LM[$w]}"
+
+    sol_disp="N/A"; nos_disp="N/A"; stk_disp="N/A"
+    if [ "$w" != "N/A" ]; then
+      # ── Live SOL balance via Solana RPC ──
+      sol_lamports="$(curl -s --max-time 5 -X POST "$SOLANA_RPC" \
+        -H "Content-Type: application/json" \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getBalance\",\"params\":[\"$w\"]}" \
+        | jq -r '.result.value // empty' 2>/dev/null)"
+      if [ -n "$sol_lamports" ] && [ "$sol_lamports" != "null" ]; then
+        sol_disp="$(awk -v v="$sol_lamports" 'BEGIN{printf "%.9f SOL", v/1000000000}')"
+      fi
+
+      # ── Live NOS token balance via Solana RPC ──
+      nos_ui="$(curl -s --max-time 5 -X POST "$SOLANA_RPC" \
+        -H "Content-Type: application/json" \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTokenAccountsByOwner\",\"params\":[\"$w\",{\"mint\":\"$NOS_MINT\"},{\"encoding\":\"jsonParsed\"}]}" \
+        | jq -r '.result.value[0].account.data.parsed.info.tokenAmount.uiAmount // empty' 2>/dev/null)"
+      if [ -n "$nos_ui" ] && [ "$nos_ui" != "null" ]; then
+        nos_disp="${nos_ui} NOS"
+      fi
+
+      # ── Staked NOS: parse from node startup log if shown ──
+      first_c="${W_CTRS[$w]%%,*}"
+      stk="$(docker logs "$first_c" 2>&1 | head -n 50 | _strip_ansi \
+           | awk '/[Ss]take[d]?:/{v=$NF; gsub(/[^0-9.]/,"",v); if(v+0>0){print v; exit}}')"
+      [ -n "$stk" ] && stk_disp="${stk} NOS"
+    fi
+
+    echo "Live Balances: SOL: ${sol_disp} | NOS: ${nos_disp} | Staked: ${stk_disp}"
+  done | tee -a mylog.txt
+fi
+#--- END WALLET, MARKET, AND BALANCES ---
 
 echo "" >> mylog.txt
 
@@ -244,7 +297,7 @@ echo "System Uptime & Load: $(uptime | sed -E 's/,? +load average:/ load average
 echo "Last Boot: $(who -b | awk '{print $3 " " $4}')" && \
 echo "Container Detection:" && \
 uname -a
-echo "Kernel: $(uname -r) -- Ubuntu: $(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d'"' -f2 || echo "N/A") -- Virtualization: $(systemd-detect-virt 2>/dev/null || echo "bare metal")" && \
+echo "Kernel: $(uname -r) -- Ubuntu: $(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d'"' -f2 || echo "N/A") -- Virtualization: $(v=$(systemd-detect-virt 2>/dev/null); [ -n "$v" ] && echo "$v" || echo "bare metal")" && \
 echo "$(grep "model name" /proc/cpuinfo | head -n1 | cut -d: -f2- | xargs) CPU Cores / Threads: $(nproc) cores, $(grep -c ^processor /proc/cpuinfo) threads" && \
 echo "CPU Frequency: $(awk '/cpu MHz/ {sum+=$4; count++} END {printf "%.1f GHz", sum/count/1000}' /proc/cpuinfo) -- Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "N/A")" && \
 echo "CPU Utilization: $(top -bn1 | grep "Cpu(s)" | awk '{print $2+$4 "% used"}') -- CPU Load Average% (60/120/180 min): $(uptime | awk -F'load average: ' '{print $2}')" && \
@@ -413,7 +466,7 @@ echo "" >> mylog.txt
 echo "docker exec podman podman ps -a" >> mylog.txt
 docker exec podman podman ps -a >> mylog.txt
 echo "" >> mylog.txt
-echo "frps logs"
+echo "frps logs" >> mylog.txt
 docker exec podman sh -c '
   echo "=== Log append at $(date) ==="
   for cid in $(podman ps -q --filter "name=^frpc"); do
