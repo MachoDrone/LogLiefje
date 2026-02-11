@@ -12,7 +12,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.55" >> mylog.txt   # ← incremented
+echo "log collector v0.00.56" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
