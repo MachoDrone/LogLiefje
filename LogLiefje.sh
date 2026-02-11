@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.43" >> mylog.txt   # ← incremented
+echo "log collector v0.00.44" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -25,12 +25,12 @@ SOLANA_RPC="https://api.mainnet-beta.solana.com"
 # Strip ANSI escape codes from piped input
 _strip_ansi() { awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[[:alpha:]]/,""); print }'; }
 
-# Find all nosana-node containers (handles: nosana-node, nosana-node.gpu0, etc.)
-NODE_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^nosana-node' | sort)"
+# Find all nosana containers (handles: nosana-node, nosana-node.gpu0, etc.)
+NODE_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^nosana' | sort)"
 
 if [ -z "$NODE_CONTAINERS" ]; then
   {
-    echo "Host: N/A (no nosana-node containers found)"
+      echo "Host: N/A (no nosana containers found)"
     echo "First Market Recommended: N/A"
     echo "Last Market Recommended: N/A"
   } | tee -a mylog.txt
@@ -56,10 +56,12 @@ else
 
     # Markets: only capture once per unique wallet
     if [ -z "${W_FM[$w]+x}" ]; then
-      tmp_tail="$(docker logs --tail 5000 "$c" 2>&1 | _strip_ansi)"
-      fm="$(echo "$tmp_tail" | awk '/Grid recommended/{for(i=1;i<=NF;i++) if($i=="recommended"){print $(i+1);exit}}' \
+      # First market from HEAD of log (startup, first 30 lines)
+      fm="$(docker logs "$c" 2>&1 | head -n 30 | _strip_ansi \
+          | awk '/Grid recommended/{for(i=1;i<=NF;i++) if($i=="recommended"){print $(i+1);exit}}' \
           | tr -cd '1-9A-HJ-NP-Za-km-z')"
-      lm="$(echo "$tmp_tail" | tac \
+      # Last market from TAIL of log (most recent, searched bottom-up)
+      lm="$(docker logs --tail 5000 "$c" 2>&1 | _strip_ansi | tac \
           | awk '/Grid recommended/{for(i=1;i<=NF;i++) if($i=="recommended"){print $(i+1);exit}}' \
           | tr -cd '1-9A-HJ-NP-Za-km-z')"
       W_FM[$w]="${fm:-N/A}"
@@ -293,6 +295,7 @@ if is_num "$TOTAL_POWER_W"; then TOTAL_POWER_DISP="${TOTAL_POWER_W}W"; else TOTA
 #--- BEGIN SYSTEM SPECS ---
 (
 echo "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
+echo "Clock: $(timedatectl 2>/dev/null | awk -F': ' '/Time zone/{tz=$2} /synchronized/{sync=$2} /NTP service/{ntp=$2} END{printf "%s | Synced: %s | NTP: %s", tz, sync, ntp}')" && \
 echo "System Uptime & Load: $(uptime | sed -E 's/,? +load average:/ load average % :/')" && \
 echo "Last Boot: $(who -b | awk '{print $3 " " $4}')" && \
 echo "Container Detection:" && \
