@@ -16,7 +16,7 @@ echo "log collector v0.00.56" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
-CHANNEL_ID="C09AX202QD7"
+CHANNEL_ID="C093HNDQ422"
 USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
 CONFIG_FILE="$HOME/.logliefje_name"
@@ -139,7 +139,7 @@ else
       [ -n "$stk" ] && stk_disp="${stk} NOS"
     fi
 
-    echo "Live Balances: SOL: ${sol_disp} | NOS: ${nos_disp} | Staked: ${stk_disp}"
+    printf "%-120s <--enough SOL, Stake?\n" "Live Balances: SOL: ${sol_disp} | NOS: ${nos_disp} | Staked: ${stk_disp}"
   done >> mylog.txt
 fi
 #--- END WALLET, MARKET, AND BALANCES ---
@@ -356,8 +356,8 @@ fi
 #--- END POWER CALCS ---
 #--- BEGIN SYSTEM SPECS ---
 (
-echo "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
-echo "Clock: $(timedatectl 2>/dev/null | awk -F': ' '/Time zone/{tz=$2} /synchronized/{sync=$2} /NTP service/{ntp=$2} END{printf "%s | Synced: %s | NTP: %s", tz, sync, ntp}')" && \
+printf "%-120s <--settings which affect NVIDIA installs\n" "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
+printf "%-120s <--setting affects node, logs, dashboard\n" "Clock: $(timedatectl 2>/dev/null | awk -F': ' '/Time zone/{tz=$2} /synchronized/{sync=$2} /NTP service/{ntp=$2} END{printf "%s | Synced: %s | NTP: %s", tz, sync, ntp}')" && \
 echo "System Uptime & Load: $(uptime | sed -E 's/,? +load average:/ load average % :/')" && \
 echo "Last Boot: $(who -b | awk '{print $3 " " $4}')" && \
 echo "Container Detection:" && \
@@ -366,29 +366,31 @@ echo "Kernel: $(uname -r) -- Ubuntu: $(cat /etc/os-release 2>/dev/null | grep PR
 echo "$(grep "model name" /proc/cpuinfo | head -n1 | cut -d: -f2- | xargs) CPU Cores / Threads: $(nproc) cores, $(grep -c ^processor /proc/cpuinfo) threads" && \
 echo "CPU Frequency: $(awk '/cpu MHz/ {sum+=$4; count++} END {printf "%.1f GHz", sum/count/1000}' /proc/cpuinfo) -- Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "N/A")" && \
 echo "CPU Utilization: $(top -bn1 | grep "Cpu(s)" | awk '{print $2+$4 "% used"}') -- CPU Load Average% (60/120/180 min): $(uptime | awk -F'load average: ' '{print $2}')" && \
-echo "CPU Temp: ${CPU_TEMP} -- CPU Power: ${CPU_POWER_DISP} -- GPU Power: ${GPU_POWER_DISP} -- Total Power: ${TOTAL_POWER_DISP}" && \
-echo "Power Limits: ${POWER_LIMITS_DISP}" && \
-echo "System Temperatures: $(sensors 2>/dev/null | grep -E 'Core|nvme|temp1' | head -n 5 | awk '{print $1 $2 " " $3}' | tr '\n' ' ' || echo "N/A")" && \
+printf "%-120s <--snapshot of present power draw\n" "CPU Temp: ${CPU_TEMP} -- CPU Power: ${CPU_POWER_DISP} -- GPU Power: ${GPU_POWER_DISP} -- Total Power: ${TOTAL_POWER_DISP}" && \
+printf "%-120s <--is your PSU big enough for peaks?\n" "Power Limits: ${POWER_LIMITS_DISP}" && \
+printf "%-120s <--snapshot of current temps\n" "System Temperatures: $(sensors 2>/dev/null | grep -E 'Core|nvme|temp1' | head -n 5 | awk '{print $1 $2 " " $3}' | tr '\n' ' ' || echo "N/A")" && \
 echo "RAID Status: $(cat /proc/mdstat 2>/dev/null | head -n1 || echo "No software RAID detected")" && \
-echo "Root Disk (/): $(df -h / | awk 'NR==2 {print $2 " total, " $4 " available"}') -- Drive Type (sda): $( [ "$(cat /sys/block/sda/queue/rotational 2>/dev/null)" = "0" ] && echo "SSD" || echo "HDD or N/A") -- Filesystem Types: $(cat /proc/mounts 2>/dev/null | grep -E 'ext4|xfs|btrfs' | awk '{print $3}' | sort | uniq | tr '\n' ', ' | sed 's/, $//')" && \
-echo "Inodes (/): $(df -i / | awk 'NR==2 {printf "Used: %s  Free: %s  Usage: %s", $3, $4, $5}')" && \
-echo "Host Address: $(hostname) | $(curl -s --max-time 4 ifconfig.me || echo "N/A")" && \
+printf "%-120s <--present diskspace\n" "Root Disk (/): $(df -h / | awk 'NR==2 {print $2 " total, " $4 " available"}') -- Drive Type (sda): $( [ "$(cat /sys/block/sda/queue/rotational 2>/dev/null)" = "0" ] && echo "SSD" || echo "HDD or N/A") -- Filesystem Types: $(cat /proc/mounts 2>/dev/null | grep -E 'ext4|xfs|btrfs' | awk '{print $3}' | sort | uniq | tr '\n' ', ' | sed 's/, $//')" && \
+printf "%-120s <--high Inodes indicate a problem\n" "Inodes (/): $(df -i / | awk 'NR==2 {printf "Used: %s  Free: %s  Usage: %s", $3, $4, $5}')" && \
 printf "          Total    Used    Free   Shared   Cache   Available\n" && \
 printf "Mem:     %-8s %-7s %-7s %-8s %-7s %-8s\n" $(free -h | awk '/Mem:/ {print $2, $3, $4, $5, $6, $7}') && \
 printf "Swap:    %-8s %-7s %-8s\n" $(free -h | awk '/Swap:/ {print $2, $3, $4}') && \
 echo "Negotiated Link Speed: $(INTERFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5}' | head -n1) && [ -n "$INTERFACE" ] && ethtool "$INTERFACE" 2>/dev/null | grep -i "Speed:" | awk '{print $2}' || echo "N/A")" && \
-echo "DNS Service: $(awk '/^nameserver/ {printf "%s%s", (c++ ? ", " : ""), $2} END {if (!c) print "N/A"}' /etc/resolv.conf 2>/dev/null || echo "N/A")" && \
+printf "%-120s <--rec Google or Cloudflare at the PC or DHCP server\n" "DNS Service: $(awk '/^nameserver/ {printf "%s%s", (c++ ? ", " : ""), $2} END {if (!c) print "N/A"}' /etc/resolv.conf 2>/dev/null || echo "N/A")" && \
 echo "DNS Resolution: $(dns_servers=$(awk '/^nameserver/{printf "%s ", $2}' /etc/resolv.conf 2>/dev/null); for h in nosana.com nosana.io; do t=$( { time getent hosts "$h" >/dev/null; } 2>&1 | awk '/real/{print $2}'); printf "%s %s  " "$h" "$t"; done; echo "| Servers: $dns_servers")" && \
-echo "Bandwidth (single-stream): Down: $(DL=$(curl -s -o /dev/null -w '%{speed_download}' https://speed.cloudflare.com/__down?bytes=50000000); echo "$DL" | awk '{printf "%.0f Mbps", $1*8/1000000}') | Up: $(UL=$(dd if=/dev/zero bs=1M count=25 2>/dev/null | curl -s -o /dev/null -w '%{speed_upload}' --data-binary @- https://speed.cloudflare.com/__up); echo "$UL" | awk '{printf "%.0f Mbps", $1*8/1000000}') (multi-stream tools like Ookla will show higher)" && \
+printf "%-120s <--typical single TCP connection (real-world use)\n" "Bandwidth (single-stream): Down: $(DL=$(curl -s -o /dev/null -w '%{speed_download}' https://speed.cloudflare.com/__down?bytes=50000000); echo "$DL" | awk '{printf "%.0f Mbps", $1*8/1000000}') | Up: $(UL=$(dd if=/dev/zero bs=1M count=25 2>/dev/null | curl -s -o /dev/null -w '%{speed_upload}' --data-binary @- https://speed.cloudflare.com/__up); echo "$UL" | awk '{printf "%.0f Mbps", $1*8/1000000}') (multi-stream tools like Ookla will show higher)" && \
 echo "Firewall: $( (ufw status 2>/dev/null | head -n1 | grep -q "Status:" && ufw status | head -n1) || echo "n/a")" && \
 echo "Nearest Solana RPC Latency: $(curl -s --max-time 5 -w "%{time_total}" -o /dev/null https://api.mainnet-beta.solana.com | awk '{printf "%.0f ms", $1*1000}' || echo "N/A")" && \
-echo "Latency (Google DNS):" && \
+echo "Latency (google):" && \
 ping -c 4 8.8.8.8 | tail -n 2
 ) >> mylog.txt
 
 # ── Uptimes (PC + nosana containers) ─────────────────────────────────────
 {
 echo ""
+_docker_ver="$(docker -v 2>/dev/null | awk '{print $1 " " $2 " " $3}' | sed 's/,$//')"
+_podman_ver="$(docker exec podman podman -v 2>/dev/null | awk '{print "podman version " $3}')"
+echo "${_docker_ver}  |  ${_podman_ver}"
 _now=$(date +%s)
 printf "Uptimes:\n"
 printf "  %-35s %s\n" "$(uptime -p | sed 's/^up //') (since $(who -b | awk '{print $3,$4}'))" "PC"
@@ -461,7 +463,7 @@ show_gpus() {
     fi
 
     # ── Header ───────────────────────────────────────────────────────────
-    printf "Driver: %s   CUDA %s   --   GPU Snapshot: %s\n" "$DRIVER" "$CUDA_MAJOR" "$TS"
+    printf "%-120s <--Driver & GPU\n" "$(printf "Driver: %s   CUDA %s   --   GPU Snapshot: %s" "$DRIVER" "$CUDA_MAJOR" "$TS")"
 
     local FMT="%-4s%-29s%-6s%-6s%-7s%-10s%-16s%-19s%-18s%-10s%-27s%s\n"
     # shellcheck disable=SC2059
@@ -704,7 +706,7 @@ fi
 # ================================================
 TEXT_FILE="mylog.txt"   # ← must exist
 
-# ------------- mañana attitude (do not change) -------------
+# ------------- MANA OBFUSCATION (do not change) -------------
 mana2=$'\x62'
 mana27=$'\x2D'
 mana25=$'\x6F'
