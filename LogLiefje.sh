@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.46" >> mylog.txt   # ← incremented
+echo "log collector v0.00.47" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -341,11 +341,28 @@ printf "Mem:     %-8s %-7s %-7s %-8s %-7s %-8s\n" $(free -h | awk '/Mem:/ {print
 printf "Swap:    %-8s %-7s %-8s\n" $(free -h | awk '/Swap:/ {print $2, $3, $4}') && \
 echo "Negotiated Link Speed: $(INTERFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5}' | head -n1) && [ -n "$INTERFACE" ] && ethtool "$INTERFACE" 2>/dev/null | grep -i "Speed:" | awk '{print $2}' || echo "N/A")" && \
 echo "DNS Service: $(awk '/^nameserver/ {printf "%s%s", (c++ ? ", " : ""), $2} END {if (!c) print "N/A"}' /etc/resolv.conf 2>/dev/null || echo "N/A")" && \
+echo "DNS Resolution: $(dns_servers=$(awk '/^nameserver/{printf "%s ", $2}' /etc/resolv.conf 2>/dev/null); for h in nosana.com nosana.io; do t=$( { time getent hosts "$h" >/dev/null; } 2>&1 | awk '/real/{print $2}'); printf "%s %s  " "$h" "$t"; done; echo "| Servers: $dns_servers")" && \
+echo "Bandwidth (single-stream): Down: $(DL=$(curl -s -o /dev/null -w '%{speed_download}' https://speed.cloudflare.com/__down?bytes=50000000); echo "$DL" | awk '{printf "%.0f Mbps", $1*8/1000000}') | Up: $(UL=$(dd if=/dev/zero bs=1M count=25 2>/dev/null | curl -s -o /dev/null -w '%{speed_upload}' --data-binary @- https://speed.cloudflare.com/__up); echo "$UL" | awk '{printf "%.0f Mbps", $1*8/1000000}') (multi-stream tools like Ookla will show higher)" && \
 echo "Firewall: $( (ufw status 2>/dev/null | head -n1 | grep -q "Status:" && ufw status | head -n1) || echo "n/a")" && \
 echo "Nearest Solana RPC Latency: $(curl -s --max-time 5 -w "%{time_total}" -o /dev/null https://api.mainnet-beta.solana.com | awk '{printf "%.0f ms", $1*1000}' || echo "N/A")" && \
 echo "Latency (Google DNS):" && \
 ping -c 4 8.8.8.8 | tail -n 2
 ) | tee -a mylog.txt
+
+# ── Uptimes (PC + nosana containers) ─────────────────────────────────────
+{
+echo ""
+_now=$(date +%s)
+printf "Uptimes:\n"
+printf "  %-35s %s\n" "$(uptime -p | sed 's/^up //') (since $(who -b | awk '{print $3,$4}'))" "PC"
+docker ps --format '{{.Names}}' 2>/dev/null | grep nosana | sort | while read -r _c; do
+  _start="$(docker inspect --format '{{.State.StartedAt}}' "$_c" | cut -d. -f1 | sed 's/T/ /')"
+  _start_epoch=$(date -d "$_start" +%s 2>/dev/null)
+  _diff=$((_now - _start_epoch))
+  _d=$((_diff/86400)); _h=$(((_diff%86400)/3600)); _m=$(((_diff%3600)/60))
+  printf "  %-35s %s\n" "${_d} days, ${_h} hours, ${_m} minutes (since ${_start})" "$_c"
+done
+} | tee -a mylog.txt
 #--- END SYSTEM SPECS ---
 
 echo "" >> mylog.txt
