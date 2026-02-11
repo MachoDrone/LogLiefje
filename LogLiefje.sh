@@ -1,7 +1,7 @@
 #!/bin/bash
 clear
 echo > mylog.txt
-echo "log collector v0.00.50" >> mylog.txt   # ← incremented
+echo "log collector v0.00.51" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -606,17 +606,19 @@ done
 NUM_LOG_CONTAINERS=${#LOG_CONTAINERS[@]}
 
 if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
-  # ── Pass 1: count lines per container ──────────────────────────────────
+  # ── Pass 1: count CLEANED lines per container ─────────────────────────
+  # Raw line counts are useless (spinner frames inflate to 170K+ "lines"
+  # that collapse to ~1 line after cleanup).  Count post-cleanup lines.
   echo ""
   _total_all=0
   _pass=0
   for _lc in "${LOG_CONTAINERS[@]}"; do
     _pass=$((_pass + 1))
-    printf "  scan pass 1 of 2 on %s (%d/%d)...\r" "$_lc" "$_pass" "$NUM_LOG_CONTAINERS"
-    LOG_TOTAL_LINES[$_lc]=$(docker logs "$_lc" 2>&1 | wc -l)
+    printf "  scan pass 1 of 2: counting cleaned lines on %s (%d/%d)...\r" "$_lc" "$_pass" "$NUM_LOG_CONTAINERS"
+    LOG_TOTAL_LINES[$_lc]=$(docker logs -t "$_lc" 2>&1 | _clean_docker_log | wc -l)
     _total_all=$((_total_all + LOG_TOTAL_LINES[$_lc]))
   done
-  printf "  scan pass 1 of 2 complete: %d total lines across %d containers\n" "$_total_all" "$NUM_LOG_CONTAINERS"
+  printf "  scan pass 1 of 2 complete: %d useful lines across %d containers          \n" "$_total_all" "$NUM_LOG_CONTAINERS"
 
   # ── Calculate fair distribution ────────────────────────────────────────
   SHARE=$((MAX_TOTAL_LINES / NUM_LOG_CONTAINERS))
@@ -649,18 +651,20 @@ if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
     done
   fi
 
-  # ── Pass 2: collect logs with calculated tail per container ────────────
+  # ── Pass 2: clean full logs, then tail the CLEANED output ──────────────
+  # Key: clean FIRST, tail SECOND.  This ensures we get the right number
+  # of useful lines, not raw spinner frames.
   _pass=0
   for _lc in "${LOG_CONTAINERS[@]}"; do
     _pass=$((_pass + 1))
-    printf "  scan pass 2 of 2 on %s (%d/%d) - collecting %s of %s lines...\r" \
+    printf "  scan pass 2 of 2: collecting %s (%d/%d) - %s of %s cleaned lines...\r" \
       "$_lc" "$_pass" "$NUM_LOG_CONTAINERS" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
     {
       printf "\n\n\n%s: (showing %s of %s lines)\n" "$_lc" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
-      docker logs -t --tail "${LOG_ALLOC[$_lc]}" "$_lc" 2>&1 | _clean_docker_log
+      docker logs -t "$_lc" 2>&1 | _clean_docker_log | tail -n "${LOG_ALLOC[$_lc]}"
     } >> mylog.txt
   done
-  printf "  scan pass 2 of 2 complete: logs collected                                  \n"
+  printf "  scan pass 2 of 2 complete: logs collected                                          \n"
 fi
 #--- END NOSANA NODE LOG TAILS ---
 
