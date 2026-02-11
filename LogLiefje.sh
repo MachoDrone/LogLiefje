@@ -1,8 +1,7 @@
 #!/bin/bash
 clear
-echo ""
 echo > mylog.txt
-echo "log collector v0.00.48" >> mylog.txt   # ← incremented
+echo "log collector v0.00.49" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -675,4 +674,5 @@ fi
 
 echo "Done!"
 echo ""
-cat mylog.txt
+# Display summary only (up to GPU table; docker/podman/frpc logs are uploaded but not shown)
+awk '/^podman version/{exit} {print}' mylog.txt
