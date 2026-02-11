@@ -1,4 +1,5 @@
 #!/bin/bash
+clear
 echo ""
 echo > mylog.txt
 echo "log collector v0.00.48" >> mylog.txt   # ← incremented
