@@ -1,7 +1,7 @@
 #!/bin/bash
 echo ""
 echo > mylog.txt
-echo "log collector v0.00.45" >> mylog.txt   # ← incremented
+echo "log collector v0.00.46" >> mylog.txt   # ← incremented
 cat mylog.txt
 # ================================================
 # Upload to Litterbox + Notify Slack Template
@@ -305,15 +305,15 @@ CPU_PL1_W=""; CPU_PL2_W=""
 # CPU Max = PL2 if available, else PL1
 CPU_MAX_W="${CPU_PL2_W:-$CPU_PL1_W}"
 
-# Build display: CPU RMS (PL1) | CPU Max (PL2) | GPU Max | Total Peak | Possible Peak (+100W overhead)
+# Build display: CPU PL1 (BIOS-set) | CPU PL2 (Capable) | GPU(s) Max | Total Peak | w/accs. Peak (+150W)
 POWER_LIMITS_DISP=""
-[ -n "$CPU_PL1_W" ] && POWER_LIMITS_DISP="CPU RMS: ${CPU_PL1_W}W"
-[ -n "$CPU_MAX_W" ] && POWER_LIMITS_DISP="${POWER_LIMITS_DISP:+$POWER_LIMITS_DISP | }CPU Max: ${CPU_MAX_W}W"
-[ -n "$GPU_MAX_W" ] && POWER_LIMITS_DISP="${POWER_LIMITS_DISP:+$POWER_LIMITS_DISP | }GPU Max: ${GPU_MAX_W}W"
+[ -n "$CPU_PL1_W" ] && POWER_LIMITS_DISP="CPU PL1 (BIOSset) Max: ${CPU_PL1_W}W"
+[ -n "$CPU_MAX_W" ] && POWER_LIMITS_DISP="${POWER_LIMITS_DISP:+$POWER_LIMITS_DISP | }CPU PL2 (Capable) Max: ${CPU_MAX_W}W"
+[ -n "$GPU_MAX_W" ] && POWER_LIMITS_DISP="${POWER_LIMITS_DISP:+$POWER_LIMITS_DISP | }GPU(s) Max: ${GPU_MAX_W}W"
 if [ -n "$CPU_MAX_W" ] && [ -n "$GPU_MAX_W" ]; then
   TOTAL_PEAK_W=$(( CPU_MAX_W + GPU_MAX_W ))
-  POSSIBLE_PEAK_W=$(( TOTAL_PEAK_W + 100 ))   # +100W for mobo, RAM, drives, fans
-  POWER_LIMITS_DISP="${POWER_LIMITS_DISP} | Total Peak: ${TOTAL_PEAK_W}W | Possible Peak: ${POSSIBLE_PEAK_W}W"
+  POSSIBLE_PEAK_W=$(( TOTAL_PEAK_W + 150 ))   # +150W for mobo, RAM, drives, fans, LEDs, cooling
+  POWER_LIMITS_DISP="${POWER_LIMITS_DISP} | Total Peak: ${TOTAL_PEAK_W}W | w/accs. Peak: ${POSSIBLE_PEAK_W}W"
 fi
 [ -z "$POWER_LIMITS_DISP" ] && POWER_LIMITS_DISP="N/A"
 #--- END POWER CALCS ---
@@ -334,6 +334,7 @@ echo "Power Limits: ${POWER_LIMITS_DISP}" && \
 echo "System Temperatures: $(sensors 2>/dev/null | grep -E 'Core|nvme|temp1' | head -n 5 | awk '{print $1 $2 " " $3}' | tr '\n' ' ' || echo "N/A")" && \
 echo "RAID Status: $(cat /proc/mdstat 2>/dev/null | head -n1 || echo "No software RAID detected")" && \
 echo "Root Disk (/): $(df -h / | awk 'NR==2 {print $2 " total, " $4 " available"}') -- Drive Type (sda): $( [ "$(cat /sys/block/sda/queue/rotational 2>/dev/null)" = "0" ] && echo "SSD" || echo "HDD or N/A") -- Filesystem Types: $(cat /proc/mounts 2>/dev/null | grep -E 'ext4|xfs|btrfs' | awk '{print $3}' | sort | uniq | tr '\n' ', ' | sed 's/, $//')" && \
+echo "Inodes (/): $(df -i / | awk 'NR==2 {printf "Used: %s  Free: %s  Usage: %s", $3, $4, $5}')" && \
 echo "Host Address: $(hostname) | $(curl -s --max-time 4 ifconfig.me || echo "N/A")" && \
 printf "          Total    Used    Free   Shared   Cache   Available\n" && \
 printf "Mem:     %-8s %-7s %-7s %-8s %-7s %-8s\n" $(free -h | awk '/Mem:/ {print $2, $3, $4, $5, $6, $7}') && \
