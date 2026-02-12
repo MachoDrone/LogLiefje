@@ -13,12 +13,12 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.65" >> mylog.txt   # ← incremented
+echo "log collector v0.00.67" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
-#CHANNEL_ID="C09AX202QD7" #production
-CHANNEL_ID="C093HNDQ422" #test
+#CHANNEL_ID="C093HNDQ422" #test
+CHANNEL_ID="C09AX202QD7" #production
 USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
 CONFIG_FILE="$HOME/.logliefje_name"
@@ -812,3 +812,116 @@ echo "Done!"
 echo ""
 # Display summary only (up to GPU table; docker/podman/frpc logs are uploaded but not shown)
 awk '/^podman version/{exit} {print}' mylog.txt
+
+# ==================================================================================
+# LOGLIEFJE PROJECT RULES & INTENTIONS
+# Keep this block at the end of the script as a reminderfor future coding sessions.
+# ==================================================================================
+#
+# ── CORE CONSTRAINTS ────────────────────────────────────────────────────────
+# - No 3rd party apps can be installed. Only native Ubuntu v20-25 tools
+#   (Desktop, Server, minimal, core).
+# - Exception: jq is auto-installed if missing. It is required for parsing
+#   Solana RPC JSON (live SOL/NOS balances) and Slack API responses (upload).
+# - perl is native to all Ubuntu versions -- it is not 3rd party.
+# - Script must work for hosts with 1 GPU or 8 GPUs.
+# - Supported OSes: Ubuntu v20-25 (Desktop, Server, minimal, core).
+#
+# ── DOCKER LOG CLEANING ────────────────────────────────────────────────────
+# - Docker logs use 2>/dev/null (stdout only) to skip stderr spinner
+#   animations (170K+ lines of noise from Nosana CLI spinners).
+# - Cleaned with perl -CSDA -pe (UTF-8 mode REQUIRED). Without -CSDA,
+#   perl operates in byte mode and breaks multi-byte UTF-8 characters
+#   like ✔ ✖ ⠋ into replacement chars (�).
+# - NEVER use mawk (Ubuntu default awk) for log cleaning. mawk destroys
+#   UTF-8 with [:print:] character class (treats it as ASCII-only).
+# - Spinner collapse: keep from last ✔/✖ or last spinner char per line.
+# - Truncate lines >300 chars (spinner/progress artifacts).
+# - Remove timestamp-only blank lines (docker entries where content was
+#   entirely ANSI codes; after stripping, only timestamp remains).
+# - tr -d strips remaining control chars (0x00-0x08, 0x0B, 0x0C,
+#   0x0E-0x1F, 0x7F). Preserves UTF-8 bytes (>= 0x80).
+# - The output file MUST be clean text with zero binary bytes, or Slack
+#   will force a file download instead of showing a browser preview link.
+#
+# ── CONTAINER DISCOVERY ────────────────────────────────────────────────────
+# - Uses docker ps -a as PRIMARY (not fallback) to find both running AND
+#   stopped containers with "nosana" anywhere in the container name.
+# - This catches all naming conventions: nosana-node, nosana-node.gpu0,
+#   nosana-node.gpu1, nosana-node1, nosana-mymachine, etc.
+# - Last-resort fallback: docker inspect nosana-node (only catches that
+#   exact literal name; used if docker ps -a returns nothing).
+# - docker logs works on stopped containers -- wallet, markets, and full
+#   log history are still accessible after docker stop.
+# - Stopped containers show: exit code (0=clean stop, 137=OOM/killed,
+#   1=error), how long it ran, and how long ago it stopped.
+#
+# ── WALLETS & BALANCES ─────────────────────────────────────────────────────
+# - Each container has a unique wallet. One GPU per container currently.
+#   Future multi-GPU containers (e.g. 4x4090) would still be one wallet
+#   per container. Associative arrays handle dedup but in practice wallets
+#   are unique per container.
+# - Wallet extracted from HEAD of docker log (first 50 lines). The wallet
+#   is printed once at container startup and never appears in recent tail.
+# - First market: head -n 5000 of log (awk exits at first match).
+# - Last market: tail 5000 searched bottom-up with tac.
+# - SOL/NOS balances are LIVE queries via Solana RPC curl POST (not from
+#   stale log data). This is why jq must be installed.
+# - NOS token mint address: nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7
+#
+# ── RAPL CPU POWER MEASUREMENT ─────────────────────────────────────────────
+# - Try modprobe intel_rapl_common / intel_rapl_msr / rapl if sysfs absent.
+# - _read_sysfs() helper: tries direct cat, falls back to sudo -n cat
+#   (non-interactive, won't hang if no passwordless sudo).
+# - Energy delta method: read energy_uj, sleep 0.25s, read again,
+#   compute watts = delta_energy / delta_time.
+# - Handles counter wrap-around via max_energy_range_uj.
+# - Fallback chain: RAPL sysfs -> hwmon power sensors -> sensors command
+#   (skips amdgpu/nvidia sections to avoid double-counting GPU power).
+# - Works on both Intel and AMD (kernel 5.8+ for AMD Zen).
+#
+# ── TIMESTAMPS & TIMEZONES ─────────────────────────────────────────────────
+# - Docker timestamps (StartedAt, FinishedAt) are in UTC.
+# - When converting with date -d, MUST append "UTC" to the string or
+#   results are wrong for non-UTC timezones. This caused negative uptimes
+#   for EST users (UTC-5) before the fix.
+#
+# ── UPLOAD ARCHITECTURE ────────────────────────────────────────────────────
+# - Two independent uploads: Litterbox (stage1) and Slack (stage2).
+# - One failure must NOT block the other. No exit 1 after stage1 failure.
+# - Show actual error details: HTTP code + response body for Litterbox,
+#   API .error field for Slack.
+# - If Litterbox fails, Slack message adjusts (no broken Litterbox link).
+# - Upload labels shown to user as "stage1" and "stage2" (no service names
+#   or URLs exposed to the operator).
+#
+# ── USER DISPLAY ───────────────────────────────────────────────────────────
+# - User sees: version, name prompt, "Collecting logs...", scan progress,
+#   upload status, "Done!", then summary up to GPU table only.
+# - Full data (podman ps, docker ps -a, frpc logs, container log tails)
+#   is uploaded but NOT displayed to the user.
+# - Display cutoff: awk '/^podman version/{exit} {print}' mylog.txt
+# - Footnotes (<--) on key lines for operator guidance.
+# - clear screen at script start.
+#
+# ── LOG TAIL BUDGET SYSTEM ─────────────────────────────────────────────────
+# - 1GB max file size (Litterbox limit).
+# - Single docker log read per container: clean to temp file, count from
+#   temp (wc -l), then head+tail from temp. Fast and efficient.
+# - Budget distributed fairly: short containers get all their lines,
+#   leftover budget flows to longer containers.
+# - HEAD_LINES=30 per container for startup info, rest allocated to tail.
+# - Navigation header before logs lists all containers with line counts
+#   and search terms (=== container_name:) for jumping in any text viewer.
+#
+# ── SCRIPT CONVENTIONS ─────────────────────────────────────────────────────
+# - Version number format: v0.00.XX, incremented with each edit.
+# - chmod +x applied to script file.
+# - Discord name saved to ~/.logliefje_name for reuse across runs.
+# - Container grep matches "nosana" anywhere in container name.
+# - All commands are native to Ubuntu except jq (auto-installed).
+# - The Nosana CLI uses \033[1G (cursor to column 1) for spinner
+#   animations, NOT \r. This is why simple \r-based cleaning fails.
+# - Bandwidth test uses Cloudflare (50MB max; 100MB returns HTTP 403).
+#   Single TCP stream -- will always show lower than multi-stream Ookla.
+# =============================================================================
