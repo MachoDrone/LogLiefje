@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.59" >> mylog.txt   # ← incremented
+echo "log collector v0.00.60" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -57,15 +57,28 @@ echo "Collecting logs..."
 # === DATA COLLECTION (silent, to mylog.txt) =====
 # ================================================
 
+# ── Find nosana containers (running first, then stopped, then default name) ──
+_find_nosana_containers() {
+  local result
+  # 1) Running containers with "nosana" in name
+  result="$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'nosana' | sort)"
+  if [ -n "$result" ]; then echo "$result"; return 0; fi
+  # 2) All containers (including stopped) with "nosana" in name
+  result="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep 'nosana' | sort)"
+  if [ -n "$result" ]; then echo "$result"; return 0; fi
+  # 3) Fallback: try default name "nosana-node" directly
+  if docker inspect nosana-node &>/dev/null; then echo "nosana-node"; return 0; fi
+  return 1
+}
+
+NODE_CONTAINERS="$(_find_nosana_containers)"
+
 #--- THE WALLET, MARKET RECOMMENDATIONS, AND LIVE BALANCES ---
 NOS_MINT="nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7"
 SOLANA_RPC="https://api.mainnet-beta.solana.com"
 
 # Strip ANSI escape codes and control chars from piped input
 _strip_ansi() { awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[[:alpha:]]/,""); print }' | tr -d '\033\000-\010\013\014\016-\037\177'; }
-
-# Find all nosana containers (matches "nosana" anywhere in container name)
-NODE_CONTAINERS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'nosana' | sort)"
 
 if [ -z "$NODE_CONTAINERS" ]; then
   {
@@ -165,8 +178,6 @@ get_cpu_power_w() {
   local d name raw sum got
 
   # ── Ensure RAPL kernel modules are loaded ──────────────────────────────
-  # On Ubuntu 22.04+ the module may not auto-load; try all known names.
-  # sudo -n = non-interactive; silently fails if user has no NOPASSWD sudo.
   if ! ls /sys/class/powercap/intel-rapl:* >/dev/null 2>&1; then
     sudo -n modprobe intel_rapl_common 2>/dev/null || true
     sudo -n modprobe intel_rapl_msr    2>/dev/null || true
@@ -175,9 +186,6 @@ get_cpu_power_w() {
   fi
 
   # ── 1) RAPL energy_uj delta method (most reliable on Intel & AMD) ──────
-  # Read energy counters, sleep briefly, read again, compute power = ΔE/Δt.
-  # Works on: Intel (all modern), AMD Zen (kernel 5.8+).
-  # Handles wrap-around via max_energy_range_uj.
   local -a dirs e_start e_max
   local i j e2 de t1 t2 dt
   i=0
@@ -212,7 +220,6 @@ get_cpu_power_w() {
       e2="$(_read_sysfs "${dirs[j]}/energy_uj")" || continue
       [[ "$e2" =~ ^[0-9]+$ ]] || continue
       de=$(( e2 - e_start[j] ))
-      # Handle counter wrap-around
       if [ "$de" -lt 0 ] && [ "${e_max[j]}" -gt 0 ]; then
         de=$(( e2 + e_max[j] - e_start[j] ))
       fi
@@ -229,7 +236,6 @@ get_cpu_power_w() {
   fi
 
   # ── 2) hwmon power sensors fallback ────────────────────────────────────
-  # Some AMD boards or Intel boards expose CPU power through hwmon.
   sum="0"
   got=0
   for d in /sys/class/hwmon/hwmon*; do
@@ -240,7 +246,7 @@ get_cpu_power_w() {
       [[ "$raw" =~ ^[0-9]+$ ]] || continue
       sum="$(awk -v s="$sum" -v u="$raw" 'BEGIN{printf "%.6f", s + (u/1000000)}')"
       got=1
-      break   # one power reading per hwmon device
+      break
     done
   done
   if [ "$got" -eq 1 ]; then
@@ -249,9 +255,6 @@ get_cpu_power_w() {
   fi
 
   # ── 3) sensors command fallback (lm-sensors) ──────────────────────────
-  # Parse power from sensors output.  Skip GPU sections (amdgpu/nvidia)
-  # to avoid double-counting GPU power.
-  # Recognises: PPT, power1, SVI2_P_Core, SVI2_P_SoC
   if command -v sensors &>/dev/null; then
     raw="$(sensors 2>/dev/null | awk '
       /^[a-zA-Z]/ { section = $0 }
@@ -341,17 +344,15 @@ CPU_PL1_W=""; CPU_PL2_W=""
 [[ "$CPU_PL1_RAW" =~ ^[0-9]+$ ]] && CPU_PL1_W="$(awk -v v="$CPU_PL1_RAW" 'BEGIN{printf "%.0f", v/1000000}')"
 [[ "$CPU_PL2_RAW" =~ ^[0-9]+$ ]] && CPU_PL2_W="$(awk -v v="$CPU_PL2_RAW" 'BEGIN{printf "%.0f", v/1000000}')"
 
-# CPU Max = PL2 if available, else PL1
 CPU_MAX_W="${CPU_PL2_W:-$CPU_PL1_W}"
 
-# Build display: CPU PL1 (BIOS-set) | CPU PL2 (Capable) | GPU(s) Max | Total Peak | w/accs. Peak (+150W)
 POWER_LIMITS_DISP=""
 [ -n "$CPU_PL1_W" ] && POWER_LIMITS_DISP="CPU PL1 (BIOSset) Max: ${CPU_PL1_W}W"
 [ -n "$CPU_MAX_W" ] && POWER_LIMITS_DISP="${POWER_LIMITS_DISP:+$POWER_LIMITS_DISP | }CPU PL2 (Capable) Max: ${CPU_MAX_W}W"
 [ -n "$GPU_MAX_W" ] && POWER_LIMITS_DISP="${POWER_LIMITS_DISP:+$POWER_LIMITS_DISP | }GPU(s) Max: ${GPU_MAX_W}W"
 if [ -n "$CPU_MAX_W" ] && [ -n "$GPU_MAX_W" ]; then
   TOTAL_PEAK_W=$(( CPU_MAX_W + GPU_MAX_W ))
-  POSSIBLE_PEAK_W=$(( TOTAL_PEAK_W + 150 ))   # +150W for mobo, RAM, drives, fans, LEDs, cooling
+  POSSIBLE_PEAK_W=$(( TOTAL_PEAK_W + 150 ))
   POWER_LIMITS_DISP="${POWER_LIMITS_DISP} | Total Peak: ${TOTAL_PEAK_W}W | w/accs. Peak: ${POSSIBLE_PEAK_W}W"
 fi
 [ -z "$POWER_LIMITS_DISP" ] && POWER_LIMITS_DISP="N/A"
@@ -387,7 +388,7 @@ echo "Latency (google):" && \
 ping -c 4 8.8.8.8 | tail -n 2
 ) >> mylog.txt
 
-# ── Uptimes (PC + nosana containers) ─────────────────────────────────────
+# ── Uptimes (PC + nosana containers with status) ─────────────────────────
 {
 echo ""
 _docker_ver="$(docker -v 2>/dev/null | awk '{print $1 " " $2 " " $3}' | sed 's/,$//')"
@@ -396,13 +397,32 @@ echo "${_docker_ver}  |  ${_podman_ver}"
 _now=$(date +%s)
 printf "Uptimes:\n"
 printf "  %-35s %s\n" "$(uptime -p | sed 's/^up //') (since $(who -b | awk '{print $3,$4}'))" "PC"
-docker ps --format '{{.Names}}' 2>/dev/null | grep nosana | sort | while read -r _c; do
-  _start="$(docker inspect --format '{{.State.StartedAt}}' "$_c" | cut -d. -f1 | sed 's/T/ /')"
-  _start_epoch=$(date -d "$_start" +%s 2>/dev/null)
-  _diff=$((_now - _start_epoch))
-  _d=$((_diff/86400)); _h=$(((_diff%86400)/3600)); _m=$(((_diff%3600)/60))
-  printf "  %-35s %s\n" "${_d} days, ${_h} hours, ${_m} minutes (since ${_start})" "$_c"
-done
+
+# Use _find_nosana_containers (includes stopped) for uptimes
+if [ -n "$NODE_CONTAINERS" ]; then
+  while IFS= read -r _c; do
+    [ -z "$_c" ] && continue
+    _status="$(docker inspect --format '{{.State.Status}}' "$_c" 2>/dev/null)"
+    _exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$_c" 2>/dev/null)"
+    _start="$(docker inspect --format '{{.State.StartedAt}}' "$_c" 2>/dev/null | cut -d. -f1 | sed 's/T/ /')"
+    _start_epoch=$(date -d "$_start" +%s 2>/dev/null)
+
+    if [ "$_status" = "running" ]; then
+      _diff=$((_now - _start_epoch))
+      _d=$((_diff/86400)); _h=$(((_diff%86400)/3600)); _m=$(((_diff%3600)/60))
+      printf "  %-35s %s\n" "${_d} days, ${_h} hours, ${_m} minutes (since ${_start})" "$_c"
+    else
+      _finished="$(docker inspect --format '{{.State.FinishedAt}}' "$_c" 2>/dev/null | cut -d. -f1 | sed 's/T/ /')"
+      _fin_epoch=$(date -d "$_finished" +%s 2>/dev/null)
+      _ran=$((_fin_epoch - _start_epoch))
+      _rd=$((_ran/86400)); _rh=$(((_ran%86400)/3600)); _rm=$(((_ran%3600)/60))
+      _ago=$((_now - _fin_epoch))
+      _ad=$((_ago/86400)); _ah=$(((_ago%86400)/3600)); _am=$(((_ago%3600)/60))
+      printf "  %-35s %s [STOPPED exit:%s, ran %dd %dh %dm, stopped %dd %dh %dm ago]\n" \
+        "(since ${_start})" "$_c" "$_exit_code" "$_rd" "$_rh" "$_rm" "$_ad" "$_ah" "$_am"
+    fi
+  done <<< "$NODE_CONTAINERS"
+fi
 } >> mylog.txt
 #--- END SYSTEM SPECS ---
 
@@ -437,7 +457,6 @@ val_or_na() {
 show_gpus() {
     local SEP='|'
 
-    # ── Collect data ─────────────────────────────────────────────────────
     local DRIVER CUDA CUDA_MAJOR TS GPU_RAW PROC_RAW GPROC_RAW ALL_PROC
 
     DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | xargs)
@@ -457,44 +476,30 @@ show_gpus() {
         --query-graphics-apps=gpu_bus_id,pid,used_gpu_memory,process_name \
         --format=csv,noheader,nounits 2>/dev/null | sed "s/, /${SEP}/g" || true)
 
-    # Merge process lists
     ALL_PROC="${PROC_RAW}"
     if [[ -n "$GPROC_RAW" ]]; then
         [[ -n "$ALL_PROC" ]] && ALL_PROC+=$'\n'
         ALL_PROC+="$GPROC_RAW"
     fi
 
-    # ── Header ───────────────────────────────────────────────────────────
     printf "%-120s <--Driver & GPU\n" "$(printf "Driver: %s   CUDA %s   --   GPU Snapshot: %s" "$DRIVER" "$CUDA_MAJOR" "$TS")"
 
     local FMT="%-4s%-29s%-6s%-6s%-7s%-10s%-16s%-19s%-18s%-10s%-27s%s\n"
-    # shellcheck disable=SC2059
     printf "$FMT" \
         "GPU" "Name" "Temp" "Fan" "Perf" "Util" "Power" "Memory" "Bus" "Disp" "Modes(P/C/M)" "Processes"
-    # shellcheck disable=SC2059
     printf "$FMT" \
         "---" "----------------------------" "-----" "-----" "------" "---------" "---------------" "------------------" "-----------------" "---------" "--------------------------" "-------------------------------"
 
-    # ── GPU rows ─────────────────────────────────────────────────────────
     while IFS="$SEP" read -r idx name temp fan pstate util pdraw plimit mused mtotal busid disp persist compute mig; do
         [[ -z "$idx" ]] && continue
 
-        idx=$(trim "$idx")
-        name=$(trim "$name")
-        busid=$(trim "$busid")
-        disp=$(trim "$disp")
-        persist=$(trim "$persist")
-        compute=$(trim "$compute")
-        mig=$(trim "$mig")
+        idx=$(trim "$idx"); name=$(trim "$name"); busid=$(trim "$busid")
+        disp=$(trim "$disp"); persist=$(trim "$persist"); compute=$(trim "$compute"); mig=$(trim "$mig")
 
-        # Formatted values
         local temp_f fan_f pstate_f util_f power_f mem_f mig_f modes_f proc_f
-        temp_f=$(val_or_na "$temp" "C")
-        fan_f=$(val_or_na "$fan" "%")
-        pstate_f=$(trim "$pstate")
-        util_f=$(val_or_na "$util" "%")
+        temp_f=$(val_or_na "$temp" "C"); fan_f=$(val_or_na "$fan" "%")
+        pstate_f=$(trim "$pstate"); util_f=$(val_or_na "$util" "%")
 
-        # Power: used/limit
         local pd pl
         pd=$(trim "$pdraw"); pl=$(trim "$plimit")
         if [[ "$pd" == *"Not Supported"* || "$pd" == *"N/A"* || -z "$pd" ]]; then
@@ -503,17 +508,14 @@ show_gpus() {
             power_f="${pd}W/${pl}W"
         fi
 
-        # Memory: used/total
         local mu mt
         mu=$(trim "$mused"); mt=$(trim "$mtotal")
         mem_f="${mu}/${mt}MiB"
 
-        # MIG mode
         mig_f="$mig"
         [[ "$mig_f" == *"Not Supported"* ]] && mig_f="[N/A]"
         modes_f="${persist}/${compute}/${mig_f}"
 
-        # ── Processes for this GPU ───────────────────────────────────────
         proc_f="n/a"
         if [[ -n "$ALL_PROC" ]]; then
             local gpu_procs=""
@@ -521,8 +523,7 @@ show_gpus() {
                 [[ -z "$ppid" ]] && continue
                 pbus=$(trim "$pbus")
                 [[ "$pbus" != "$busid" ]] && continue
-                ppid=$(trim "$ppid")
-                pmem=$(trim "$pmem")
+                ppid=$(trim "$ppid"); pmem=$(trim "$pmem")
                 pname=$(basename "$(trim "$pname")")
                 [[ -n "$gpu_procs" ]] && gpu_procs+=" | "
                 gpu_procs+="PID ${ppid}   ${pmem}MiB    ${pname}"
@@ -530,14 +531,12 @@ show_gpus() {
             [[ -n "$gpu_procs" ]] && proc_f="$gpu_procs"
         fi
 
-        # shellcheck disable=SC2059
         printf "$FMT" \
             "$idx" "$name" "$temp_f" "$fan_f" "$pstate_f" "$util_f" "$power_f" "$mem_f" "$busid" "$disp" "$modes_f" "$proc_f"
 
     done <<< "$GPU_RAW"
 }
 
-# ── Run nvidia-smi and append to mylog.txt ───────────────────────────────────
 if command -v nvidia-smi &>/dev/null; then
     show_gpus >> mylog.txt
 else
@@ -578,7 +577,7 @@ if [ -n "$PS_ALL" ]; then
 
   {
     echo "docker ps -a (${TOTAL_CONTAINERS} total, ${NOT_SHOWN} not shown)"
-    printf '%s\n' "$PS_ALL" | head -n $((MAX_SHOW + 1))   # header + first 20
+    printf '%s\n' "$PS_ALL" | head -n $((MAX_SHOW + 1))
     echo "*** Plus ${NOT_SHOWN} more containers ***"
   } >> mylog.txt
 else
@@ -587,10 +586,9 @@ fi
 #--- END DOCKER COMMANDS ---
 
 #--- BEGIN NOSANA NODE LOG TAILS (budget-distributed, cleaned) ---
-# Collects stdout-only docker logs (2>/dev/null skips stderr spinners).
-# Cleans with perl: strips ANSI, collapses spinner repetitions to last
-# status, truncates long lines, removes timestamp-only blanks.
-# Distributes available space fairly across containers (1GB max).
+# Logs from stdout only (2>/dev/null skips stderr spinners), cleaned with
+# perl to strip escape codes, collapse spinner repetitions, and sanitize
+# to plain text. Space distributed fairly across containers (1GB max).
 
 _clean_docker_log() {
   perl -pe '
@@ -610,10 +608,13 @@ BYTES_PER_LINE=200
 MAX_TOTAL_LINES=$((REMAINING / BYTES_PER_LINE))
 HEAD_LINES=30
 
+# Reuse NODE_CONTAINERS from discovery (includes stopped containers)
 LOG_CONTAINERS=()
-for _lc in $(docker ps --format '{{.Names}}' 2>/dev/null | grep nosana | sort); do
-  LOG_CONTAINERS+=("$_lc")
-done
+if [ -n "$NODE_CONTAINERS" ]; then
+  while IFS= read -r _lc; do
+    [ -n "$_lc" ] && LOG_CONTAINERS+=("$_lc")
+  done <<< "$NODE_CONTAINERS"
+fi
 NUM_LOG_CONTAINERS=${#LOG_CONTAINERS[@]}
 
 if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
@@ -762,7 +763,6 @@ curl -s -X POST \
   "$UPLOAD_URL_SLACK" > /dev/null
 
 # Slack Step 3: Complete upload and share to channel
-# Escape Discord name for JSON safety
 DISCORD_NAME_ESC=$(echo "$DISCORD_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
 COMPLETE_RESPONSE=$(curl -s -X POST \
@@ -784,13 +784,11 @@ echo "99%"
 printf "Verifying... "
 ERRORS=""
 
-# Confirm Litterbox link returns HTTP 200
 LB_HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$UPLOAD_URL")
 if [[ "$LB_HTTP" != "200" ]]; then
     ERRORS="${ERRORS}  Litterbox: HTTP $LB_HTTP (expected 200)\n"
 fi
 
-# Confirm Slack upload succeeded and permalink exists
 if [[ "$SLACK_OK" != "true" ]]; then
     ERRORS="${ERRORS}  Slack: upload not confirmed\n"
 elif [[ -z "$SLACK_PERMALINK" ]]; then
