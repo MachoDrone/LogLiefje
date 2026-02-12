@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.61" >> mylog.txt   # ← incremented
+echo "log collector v0.00.62" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -60,13 +60,10 @@ echo "Collecting logs..."
 # ── Find nosana containers (running first, then stopped, then default name) ──
 _find_nosana_containers() {
   local result
-  # 1) Running containers with "nosana" in name
-  result="$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'nosana' | sort)"
-  if [ -n "$result" ]; then echo "$result"; return 0; fi
-  # 2) All containers (including stopped) with "nosana" in name
+  # All containers (running + stopped) with "nosana" in name
   result="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep 'nosana' | sort)"
   if [ -n "$result" ]; then echo "$result"; return 0; fi
-  # 3) Fallback: try default name "nosana-node" directly
+  # Fallback: try default name "nosana-node" directly
   if docker inspect nosana-node &>/dev/null; then echo "nosana-node"; return 0; fi
   return 1
 }
@@ -405,15 +402,15 @@ if [ -n "$NODE_CONTAINERS" ]; then
     _status="$(docker inspect --format '{{.State.Status}}' "$_c" 2>/dev/null)"
     _exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$_c" 2>/dev/null)"
     _start="$(docker inspect --format '{{.State.StartedAt}}' "$_c" 2>/dev/null | cut -d. -f1 | sed 's/T/ /')"
-    _start_epoch=$(date -d "$_start" +%s 2>/dev/null)
+    _start_epoch=$(date -d "${_start} UTC" +%s 2>/dev/null)
 
     if [ "$_status" = "running" ]; then
       _diff=$((_now - _start_epoch))
       _d=$((_diff/86400)); _h=$(((_diff%86400)/3600)); _m=$(((_diff%3600)/60))
-      printf "  %-35s %s\n" "${_d} days, ${_h} hours, ${_m} minutes (since ${_start})" "$_c"
+      printf "  %-35s %s\n" "${_d} days, ${_h} hours, ${_m} minutes (since ${_start} UTC)" "$_c"
     else
       _finished="$(docker inspect --format '{{.State.FinishedAt}}' "$_c" 2>/dev/null | cut -d. -f1 | sed 's/T/ /')"
-      _fin_epoch=$(date -d "$_finished" +%s 2>/dev/null)
+      _fin_epoch=$(date -d "${_finished} UTC" +%s 2>/dev/null)
       _ran=$((_fin_epoch - _start_epoch))
       _rd=$((_ran/86400)); _rh=$(((_ran%86400)/3600)); _rm=$(((_ran%3600)/60))
       _ago=$((_now - _fin_epoch))
@@ -595,7 +592,7 @@ _clean_docker_log() {
     s/.*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*/  / unless /[✔✖]/;
     $_ = substr($_, 0, 300) . "...\n" if length($_) > 300;
     $_ = "" if /^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*$/;
-  ' | tr -d '\000-\010\013\014\016-\037\177' | grep -v '^\s*$'
+  ' | tr -d '\000-\010\013\014\016-\037\177' | grep -av '^\s*$'
 }
 
 MAX_FILE_BYTES=1073741824
