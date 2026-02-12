@@ -13,12 +13,12 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.68" >> mylog.txt   # ← incremented
+echo "log collector v0.00.69" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
-#CHANNEL_ID="C09AX202QD7" #production
-CHANNEL_ID="C093HNDQ422" #test
+CHANNEL_ID="C09AX202QD7" #production
+#CHANNEL_ID="C093HNDQ422" #test
 USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
 CONFIG_FILE="$HOME/.logliefje_name"
