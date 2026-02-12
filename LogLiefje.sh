@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.64" >> mylog.txt   # ← incremented
+echo "log collector v0.00.65" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -357,7 +357,7 @@ fi
 #--- BEGIN SYSTEM SPECS ---
 (
 printf "%-120s <--settings which affect NVIDIA installs\n" "Boot Mode: $( [ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy BIOS (CSM)") | SecureBoot: $( [ -d /sys/firmware/efi ] && (od -An -tx1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' | grep -q 01 && echo "Enabled" || echo "Disabled") || echo "N/A (Legacy BIOS)")" && \
-printf "%-120s <--setting affects node, logs, dashboard\n" "Clock: $(timedatectl 2>/dev/null | awk -F': ' '/Time zone/{tz=$2} /synchronized/{sync=$2} /NTP service/{ntp=$2} END{printf "%s | Synced: %s | NTP: %s", tz, sync, ntp}')" && \
+printf "%-120s <--setting affects node, logs, dashboard\n" "Time Zone/Synch: $(timedatectl 2>/dev/null | awk -F': ' '/Time zone/{tz=$2} /synchronized/{sync=$2} /NTP service/{ntp=$2} END{printf "%s | Synced: %s | NTP: %s", tz, sync, ntp}')" && \
 echo "System Uptime & Load: $(uptime | sed -E 's/,? +load average:/ load average % :/')" && \
 echo "Last Boot: $(who -b | awk '{print $3 " " $4}')" && \
 echo "Container Detection:" && \
@@ -726,7 +726,7 @@ UPLOAD_URL=""
 SLACK_OK="false"
 
 # ── Litterbox upload ─────────────────────────────────────────────────────
-printf "  Litterbox: "
+printf "  stage1: "
 LB_RESPONSE=$(curl -s --max-time 30 -w "\n%{http_code}" -F "reqtype=fileupload" \
                    -F "time=$EXPIRATION" \
                    -F "fileToUpload=@$TEXT_FILE" \
@@ -736,14 +736,14 @@ LB_BODY=$(echo "$LB_RESPONSE" | sed '$d')
 
 if [[ "$LB_BODY" =~ ^https://litter.catbox.moe/ ]]; then
     UPLOAD_URL="$LB_BODY"
-    echo "OK ($UPLOAD_URL)"
+    echo "OK"
 else
     echo "FAILED (HTTP $LB_HTTP: ${LB_BODY:0:100})"
     ERRORS="${ERRORS}  Litterbox: HTTP $LB_HTTP - ${LB_BODY:0:100}\n"
 fi
 
 # ── Slack upload ─────────────────────────────────────────────────────────
-printf "  Slack: "
+printf "  stage2: "
 DISCORD_NAME_ESC=$(echo "$DISCORD_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
 # Step 1: Get upload URL
