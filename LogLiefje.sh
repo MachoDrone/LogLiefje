@@ -13,12 +13,12 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.67" >> mylog.txt   # ← incremented
+echo "log collector v0.00.68" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
-#CHANNEL_ID="C093HNDQ422" #test
-CHANNEL_ID="C09AX202QD7" #production
+#CHANNEL_ID="C09AX202QD7" #production
+CHANNEL_ID="C093HNDQ422" #test
 USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
 CONFIG_FILE="$HOME/.logliefje_name"
@@ -684,8 +684,16 @@ if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
     printf "  writing %s: head %d + tail %d of %d lines\n" \
       "$_lc" "$HEAD_LINES" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
     {
-      printf "\n\n\n=== %s: head %d + tail %d of %d cleaned lines ===\n" \
-        "$_lc" "$HEAD_LINES" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
+      _shown=$((HEAD_LINES + LOG_ALLOC[$_lc]))
+      [ "$_shown" -gt "${LOG_TOTAL_LINES[$_lc]}" ] && _shown="${LOG_TOTAL_LINES[$_lc]}"
+      _omitted=$((LOG_TOTAL_LINES[$_lc] - _shown))
+      if [ "$_omitted" -eq 0 ]; then
+        _trim_note="100% OF LOG"
+      else
+        _trim_note="${_omitted} lines omitted"
+      fi
+      printf "\n\n\n=== %s: head %d + tail %d of %d cleaned lines (%s) ===\n" \
+        "$_lc" "$HEAD_LINES" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}" "$_trim_note"
       echo "--- HEAD (first ${HEAD_LINES} lines) ---"
       head -n "$HEAD_LINES" "$_tmplog"
       echo ""
@@ -813,10 +821,10 @@ echo ""
 # Display summary only (up to GPU table; docker/podman/frpc logs are uploaded but not shown)
 awk '/^podman version/{exit} {print}' mylog.txt
 
-# ==================================================================================
+# =============================================================================
 # LOGLIEFJE PROJECT RULES & INTENTIONS
-# Keep this block at the end of the script as a reminderfor future coding sessions.
-# ==================================================================================
+# Keep this block at the end of the script for future AI coding sessions.
+# =============================================================================
 #
 # ── CORE CONSTRAINTS ────────────────────────────────────────────────────────
 # - No 3rd party apps can be installed. Only native Ubuntu v20-25 tools
