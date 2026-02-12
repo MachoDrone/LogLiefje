@@ -13,11 +13,12 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.59" >> mylog.txt   # ← incremented
+echo "log collector v0.00.60" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
-CHANNEL_ID="C09AX202QD7"
+#CHANNEL_ID="C09AX202QD7" #production
+CHANNEL_ID="C093HNDQ422" #test
 USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
 CONFIG_FILE="$HOME/.logliefje_name"
@@ -707,7 +708,7 @@ fi
 # ================================================
 TEXT_FILE="mylog.txt"   # ← must exist
 
-# ------------- mana attitude (do not change) -------------
+# ------------- mañana attitude (do not change) -------------
 mana2=$'\x62'
 mana27=$'\x2D'
 mana25=$'\x6F'
