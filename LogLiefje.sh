@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.63" >> mylog.txt   # ← incremented
+echo "log collector v0.00.64" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -719,23 +719,35 @@ fi
 
 FILE_SIZE=$(wc -c < "$TEXT_FILE" | tr -d ' ')
 
-# ------------- UPLOAD -------------
-printf "Uploading (%s bytes)... " "$FILE_SIZE"
+# ------------- UPLOAD (both independent -- one failure doesn't block the other) -------------
+printf "Uploading (%s bytes)...\n" "$FILE_SIZE"
+ERRORS=""
+UPLOAD_URL=""
+SLACK_OK="false"
 
-# Litterbox upload (silent)
-UPLOAD_URL=$(curl -s -F "reqtype=fileupload" \
+# ── Litterbox upload ─────────────────────────────────────────────────────
+printf "  Litterbox: "
+LB_RESPONSE=$(curl -s --max-time 30 -w "\n%{http_code}" -F "reqtype=fileupload" \
                    -F "time=$EXPIRATION" \
                    -F "fileToUpload=@$TEXT_FILE" \
-                   https://litterbox.catbox.moe/resources/internals/api.php)
+                   https://litterbox.catbox.moe/resources/internals/api.php 2>&1)
+LB_HTTP=$(echo "$LB_RESPONSE" | tail -1)
+LB_BODY=$(echo "$LB_RESPONSE" | sed '$d')
 
-if [[ -z "$UPLOAD_URL" || ! "$UPLOAD_URL" =~ ^https://litter.catbox.moe/ ]]; then
-    echo "FAILED"
-    echo "  Litterbox upload failed!"
-    exit 1
+if [[ "$LB_BODY" =~ ^https://litter.catbox.moe/ ]]; then
+    UPLOAD_URL="$LB_BODY"
+    echo "OK ($UPLOAD_URL)"
+else
+    echo "FAILED (HTTP $LB_HTTP: ${LB_BODY:0:100})"
+    ERRORS="${ERRORS}  Litterbox: HTTP $LB_HTTP - ${LB_BODY:0:100}\n"
 fi
 
-# Slack Step 1: Get upload URL
-GET_RESPONSE=$(curl -s -X POST \
+# ── Slack upload ─────────────────────────────────────────────────────────
+printf "  Slack: "
+DISCORD_NAME_ESC=$(echo "$DISCORD_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+# Step 1: Get upload URL
+GET_RESPONSE=$(curl -s --max-time 15 -X POST \
   -H "Authorization: Bearer $mana" \
   -F "filename=$SLACK_FILENAME" \
   -F "length=$FILE_SIZE" \
@@ -744,55 +756,55 @@ GET_RESPONSE=$(curl -s -X POST \
 
 UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url // empty')
 FILE_ID=$(echo "$GET_RESPONSE" | jq -r '.file_id // empty')
+SLACK_ERR=$(echo "$GET_RESPONSE" | jq -r '.error // empty')
 
 if [[ -z "$UPLOAD_URL_SLACK" || -z "$FILE_ID" ]]; then
-    echo "FAILED"
-    echo "  Slack upload URL request failed!"
-    exit 1
-fi
-
-# Slack Step 2: Upload file content (silent)
-curl -s -X POST \
-  -F "file=@$TEXT_FILE" \
-  "$UPLOAD_URL_SLACK" > /dev/null
-
-# Slack Step 3: Complete upload and share to channel
-DISCORD_NAME_ESC=$(echo "$DISCORD_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
-
-COMPLETE_RESPONSE=$(curl -s -X POST \
-  -H "Authorization: Bearer $mana" \
-  -H "Content-type: application/json; charset=utf-8" \
-  --data "{
-    \"files\": [{\"id\":\"$FILE_ID\",\"title\":\"$SLACK_FILENAME\"}],
-    \"channel_id\": \"$CHANNEL_ID\",
-    \"initial_comment\": \"<@${USER_ID}> (link expires in ${EXPIRATION}): <${UPLOAD_URL}|${DISCORD_NAME_ESC}>\"
-  }" \
-  https://slack.com/api/files.completeUploadExternal)
-
-SLACK_OK=$(echo "$COMPLETE_RESPONSE" | jq -r '.ok // "false"')
-SLACK_PERMALINK=$(echo "$COMPLETE_RESPONSE" | jq -r '.files[0].permalink // empty')
-
-echo "99%"
-
-# ------------- VERIFY LINKS -------------
-printf "Verifying... "
-ERRORS=""
-
-LB_HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$UPLOAD_URL")
-if [[ "$LB_HTTP" != "200" ]]; then
-    ERRORS="${ERRORS}  Litterbox: HTTP $LB_HTTP (expected 200)\n"
-fi
-
-if [[ "$SLACK_OK" != "true" ]]; then
-    ERRORS="${ERRORS}  Slack: upload not confirmed\n"
-elif [[ -z "$SLACK_PERMALINK" ]]; then
-    ERRORS="${ERRORS}  Slack: no permalink returned\n"
-fi
-
-if [[ -z "$ERRORS" ]]; then
-    echo "OK"
+    echo "FAILED (get URL: ${SLACK_ERR:-no upload_url returned})"
+    ERRORS="${ERRORS}  Slack: get URL failed - ${SLACK_ERR:-no upload_url}\n"
 else
-    echo "FAILED"
+    # Step 2: Upload file content
+    curl -s --max-time 30 -X POST \
+      -F "file=@$TEXT_FILE" \
+      "$UPLOAD_URL_SLACK" > /dev/null
+
+    # Step 3: Complete upload and share to channel
+    # Include Litterbox link in message if available
+    if [ -n "$UPLOAD_URL" ]; then
+      SLACK_COMMENT="<@${USER_ID}> (link expires in ${EXPIRATION}): <${UPLOAD_URL}|${DISCORD_NAME_ESC}>"
+    else
+      SLACK_COMMENT="<@${USER_ID}> ${DISCORD_NAME_ESC} (Litterbox upload failed)"
+    fi
+
+    COMPLETE_RESPONSE=$(curl -s --max-time 15 -X POST \
+      -H "Authorization: Bearer $mana" \
+      -H "Content-type: application/json; charset=utf-8" \
+      --data "{
+        \"files\": [{\"id\":\"$FILE_ID\",\"title\":\"$SLACK_FILENAME\"}],
+        \"channel_id\": \"$CHANNEL_ID\",
+        \"initial_comment\": \"${SLACK_COMMENT}\"
+      }" \
+      https://slack.com/api/files.completeUploadExternal)
+
+    SLACK_OK=$(echo "$COMPLETE_RESPONSE" | jq -r '.ok // "false"')
+    SLACK_PERMALINK=$(echo "$COMPLETE_RESPONSE" | jq -r '.files[0].permalink // empty')
+    SLACK_ERR2=$(echo "$COMPLETE_RESPONSE" | jq -r '.error // empty')
+
+    if [[ "$SLACK_OK" == "true" ]]; then
+        echo "OK"
+    else
+        echo "FAILED (complete: ${SLACK_ERR2:-unknown})"
+        ERRORS="${ERRORS}  Slack: complete failed - ${SLACK_ERR2:-unknown}\n"
+    fi
+fi
+
+# ── Summary ──────────────────────────────────────────────────────────────
+if [[ -z "$ERRORS" ]]; then
+    echo "Both uploads OK"
+elif [[ -n "$UPLOAD_URL" || "$SLACK_OK" == "true" ]]; then
+    echo "Partial success:"
+    echo -e "$ERRORS"
+else
+    echo "Both uploads FAILED:"
     echo -e "$ERRORS"
 fi
 
