@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.62" >> mylog.txt   # ← incremented
+echo "log collector v0.00.63" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -416,7 +416,7 @@ if [ -n "$NODE_CONTAINERS" ]; then
       _ago=$((_now - _fin_epoch))
       _ad=$((_ago/86400)); _ah=$(((_ago%86400)/3600)); _am=$(((_ago%3600)/60))
       printf "  %-35s %s [STOPPED exit:%s, ran %dd %dh %dm, stopped %dd %dh %dm ago]\n" \
-        "(since ${_start})" "$_c" "$_exit_code" "$_rd" "$_rh" "$_rm" "$_ad" "$_ah" "$_am"
+        "(since ${_start} UTC)" "$_c" "$_exit_code" "$_rd" "$_rh" "$_rm" "$_ad" "$_ah" "$_am"
     fi
   done <<< "$NODE_CONTAINERS"
 fi
@@ -585,7 +585,7 @@ fi
 # to plain text. Space distributed fairly across containers (1GB max).
 
 _clean_docker_log() {
-  perl -pe '
+  perl -CSDA -pe '
     s/\e\[\??[0-9;]*[a-zA-Z]//g;
     s/\e//g;
     s/.*([✔✖])/$1/;
