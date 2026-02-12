@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.60" >> mylog.txt   # ← incremented
+echo "log collector v0.00.61" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -568,17 +568,14 @@ docker -v >> mylog.txt
 docker ps >> mylog.txt
 echo "" >> mylog.txt
 
-MAX_SHOW=20
 PS_ALL="$(docker ps -a 2>/dev/null || true)"
 
 if [ -n "$PS_ALL" ]; then
   TOTAL_CONTAINERS="$(printf '%s\n' "$PS_ALL" | awk 'NR>1 && NF{c++} END{print c+0}')"
-  NOT_SHOWN=$(( TOTAL_CONTAINERS > MAX_SHOW ? TOTAL_CONTAINERS - MAX_SHOW : 0 ))
 
   {
-    echo "docker ps -a (${TOTAL_CONTAINERS} total, ${NOT_SHOWN} not shown)"
-    printf '%s\n' "$PS_ALL" | head -n $((MAX_SHOW + 1))
-    echo "*** Plus ${NOT_SHOWN} more containers ***"
+    echo "docker ps -a (${TOTAL_CONTAINERS} total)"
+    printf '%s\n' "$PS_ALL"
   } >> mylog.txt
 else
   echo "docker ps -a (unavailable)" >> mylog.txt
