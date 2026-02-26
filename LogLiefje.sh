@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.69" >> mylog.txt   # ← incremented
+echo "log collector v0.00.70" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -735,7 +735,7 @@ SLACK_OK="false"
 
 # ── Litterbox upload ─────────────────────────────────────────────────────
 printf "  stage1: "
-LB_RESPONSE=$(curl -s --max-time 30 -w "\n%{http_code}" -F "reqtype=fileupload" \
+LB_RESPONSE=$(curl -s --max-time 120 -w "\n%{http_code}" -F "reqtype=fileupload" \
                    -F "time=$EXPIRATION" \
                    -F "fileToUpload=@$TEXT_FILE" \
                    https://litterbox.catbox.moe/resources/internals/api.php 2>&1)
@@ -759,7 +759,6 @@ GET_RESPONSE=$(curl -s --max-time 15 -X POST \
   -H "Authorization: Bearer $mana" \
   -F "filename=$SLACK_FILENAME" \
   -F "length=$FILE_SIZE" \
-  -F "snippet_type=text" \
   https://slack.com/api/files.getUploadURLExternal)
 
 UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url // empty')
