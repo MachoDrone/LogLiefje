@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.00.72 — 2026-02-26
+- **Added:** `--test` flag to route uploads to the test Slack channel instead of production. Usage: `bash LogLiefje.sh --test`
+
 ## v0.00.71 — 2026-02-26
 - **Fixed:** Slack inline preview broken by binary/control bytes in uploaded `.txt` file. Added a final `perl` sanitization pass on `mylog.txt` before upload that strips all non-text bytes (NUL, ESC, control chars, DEL, invalid byte sequences) while preserving tab, newline, printable ASCII, and valid UTF-8.
 

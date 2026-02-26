@@ -13,12 +13,24 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.71" >> mylog.txt   # ← incremented
+echo "log collector v0.00.72" >> mylog.txt   # ← incremented
 cat mylog.txt
 
+# ------------- ARGUMENT PARSING -------------
+TEST_MODE=false
+for arg in "$@"; do
+  case "$arg" in
+    --test) TEST_MODE=true ;;
+  esac
+done
+
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
-CHANNEL_ID="C09AX202QD7" #production
-#CHANNEL_ID="C093HNDQ422" #test
+if [ "$TEST_MODE" = true ]; then
+  CHANNEL_ID="C093HNDQ422"   #test
+  echo "** TEST MODE — posting to test channel **"
+else
+  CHANNEL_ID="C09AX202QD7"   #production
+fi
 USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
 CONFIG_FILE="$HOME/.logliefje_name"
