@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.70" >> mylog.txt   # ← incremented
+echo "log collector v0.00.71" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- CONFIG (DO NOT EDIT THESE) -------------
@@ -725,6 +725,10 @@ if [[ ! -f "$TEXT_FILE" ]]; then
     exit 1
 fi
 
+FILE_SIZE=$(wc -c < "$TEXT_FILE" | tr -d ' ')
+
+# Sanitize: strip any stray binary/control bytes so Slack shows inline text preview
+perl -CSDA -pi -e 's/[^\x09\x0A\x0D\x20-\x7E\x{80}-\x{10FFFF}]//g' "$TEXT_FILE"
 FILE_SIZE=$(wc -c < "$TEXT_FILE" | tr -d ' ')
 
 # ------------- UPLOAD (both independent -- one failure doesn't block the other) -------------
