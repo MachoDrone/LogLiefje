@@ -583,17 +583,17 @@ echo "" >> mylog.txt
 docker -v >> mylog.txt
 echo "" >> mylog.txt
 
-PS_ALL="$(docker ps -a 2>/dev/null || true)"
+PS_ALL="$(docker ps 2>/dev/null || true)"
 
 if [ -n "$PS_ALL" ]; then
   TOTAL_CONTAINERS="$(printf '%s\n' "$PS_ALL" | awk 'NR>1 && NF{c++} END{print c+0}')"
 
   {
-    echo "docker ps -a (${TOTAL_CONTAINERS} total)"
+    echo "docker ps (${TOTAL_CONTAINERS} total)"
     printf '%s\n' "$PS_ALL"
   } >> mylog.txt
 else
-  echo "docker ps -a (unavailable)" >> mylog.txt
+  echo "docker ps (unavailable)" >> mylog.txt
 fi
 #--- END DOCKER COMMANDS ---
 
@@ -1040,7 +1040,7 @@ awk '/^podman version/{exit} {print}' mylog.txt
 # ── USER DISPLAY ───────────────────────────────────────────────────────────
 # - User sees: version, name prompt, "Collecting logs...", scan progress,
 #   upload status, "Done!", then summary up to GPU table only.
-# - Full data (podman ps, docker ps -a, frpc logs, container log tails)
+# - Full data (podman ps, docker ps, frpc logs, container log tails)
 #   is uploaded but NOT displayed to the user.
 # - Display cutoff: awk '/^podman version/{exit} {print}' mylog.txt
 # - Footnotes (<--) on key lines for operator guidance.
