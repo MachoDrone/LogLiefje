@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.72" >> mylog.txt   # ← incremented
+echo "log collector v0.00.85" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- ARGUMENT PARSING -------------
@@ -69,18 +69,27 @@ echo "Collecting logs..."
 # === DATA COLLECTION (silent, to mylog.txt) =====
 # ================================================
 
-# ── Find nosana containers (running first, then stopped, then default name) ──
-_find_nosana_containers() {
-  local result
-  # All containers (running + stopped) with "nosana" in name
-  result="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep 'nosana' | sort)"
-  if [ -n "$result" ]; then echo "$result"; return 0; fi
-  # Fallback: try default name "nosana-node" directly
-  if docker inspect nosana-node &>/dev/null; then echo "nosana-node"; return 0; fi
-  return 1
+# ── Discover nosana-node containers via image-based detection ──────────────
+# Returns outer|inner|logpath triples in NODE_PAIRS array.
+# Outer: Docker containers running nosana/podman image
+# Inner: Podman containers running nosana/nosana-node image (inside outer)
+# Logpath: direct log file path inside the outer container
+_discover_nosana_nodes() {
+  NODE_PAIRS=()
+  local outers outer inners inner logpath
+  mapfile -t outers < <(docker ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | grep 'nosana/podman' | awk '{print $1}')
+  for outer in "${outers[@]}"; do
+    [ -z "$outer" ] && continue
+    mapfile -t inners < <(docker exec "$outer" podman ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | grep 'nosana/nosana-node' | awk '{print $1}')
+    for inner in "${inners[@]}"; do
+      [ -z "$inner" ] && continue
+      logpath="$(docker exec "$outer" podman inspect --format='{{.HostConfig.LogConfig.Path}}' "$inner" 2>/dev/null)"
+      [ -z "$logpath" ] && continue
+      NODE_PAIRS+=("${outer}|${inner}|${logpath}")
+    done
+  done
 }
-
-NODE_CONTAINERS="$(_find_nosana_containers)"
+_discover_nosana_nodes
 
 #--- THE WALLET, MARKET RECOMMENDATIONS, AND LIVE BALANCES ---
 NOS_MINT="nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7"
@@ -89,7 +98,7 @@ SOLANA_RPC="https://api.mainnet-beta.solana.com"
 # Strip ANSI escape codes and control chars from piped input
 _strip_ansi() { awk '{ gsub(/\r/,""); gsub(/\033\[[0-9;]*[[:alpha:]]/,""); print }' | tr -d '\033\000-\010\013\014\016-\037\177'; }
 
-if [ -z "$NODE_CONTAINERS" ]; then
+if [ ${#NODE_PAIRS[@]} -eq 0 ]; then
   {
     echo "Host: N/A (no nosana containers found)"
     echo "First Market Recommended: N/A"
@@ -97,38 +106,40 @@ if [ -z "$NODE_CONTAINERS" ]; then
   } >> mylog.txt
 else
   # Track unique wallets and which containers share them
-  declare -A W_CTRS W_FM W_LM
+  declare -A W_CTRS W_FM W_LM W_OUTER W_LOGPATH
   declare -a W_ORD
 
-  while IFS= read -r c; do
-    [ -z "$c" ] && continue
+  for _pair in "${NODE_PAIRS[@]}"; do
+    IFS='|' read -r _outer _inner _logpath <<< "$_pair"
+    _label="[${_outer}] ${_inner}"
 
-    # ── Wallet from HEAD of log (printed once at startup, not in tail) ──
-    w="$(docker logs "$c" 2>&1 | head -n 50 | _strip_ansi \
-       | awk '/Wallet:/{print $NF; exit}' | tr -cd '1-9A-HJ-NP-Za-km-z')"
+    # ── Wallet from log (grep first match directly — no podman call) ──
+    w="$(docker exec "$_outer" grep -m1 'Wallet:' "$_logpath" 2>/dev/null | _strip_ansi \
+       | awk '{print $NF}' | tr -cd '1-9A-HJ-NP-Za-km-z')"
     [ -z "$w" ] && w="N/A"
 
     # Collect containers per wallet (dedup)
     if [ -z "${W_CTRS[$w]+x}" ]; then
-      W_CTRS[$w]="$c"; W_ORD+=("$w")
+      W_CTRS[$w]="$_label"; W_ORD+=("$w")
+      W_OUTER[$w]="$_outer"; W_LOGPATH[$w]="$_logpath"
     else
-      W_CTRS[$w]="${W_CTRS[$w]}, $c"
+      W_CTRS[$w]="${W_CTRS[$w]}, $_label"
     fi
 
     # Markets: only capture once per unique wallet
     if [ -z "${W_FM[$w]+x}" ]; then
       # First market from HEAD of log (first occurrence in first 5000 lines; awk exits at first match)
-      fm="$(docker logs "$c" 2>&1 | head -n 5000 | _strip_ansi \
+      fm="$(docker exec "$_outer" head -n 5000 "$_logpath" 2>/dev/null | _strip_ansi \
           | awk '/Grid recommended/{for(i=1;i<=NF;i++) if($i=="recommended"){print $(i+1);exit}}' \
           | tr -cd '1-9A-HJ-NP-Za-km-z')"
       # Last market from TAIL of log (most recent, searched bottom-up)
-      lm="$(docker logs --tail 5000 "$c" 2>&1 | _strip_ansi | tac \
+      lm="$(docker exec "$_outer" tail -n 5000 "$_logpath" 2>/dev/null | _strip_ansi | tac \
           | awk '/Grid recommended/{for(i=1;i<=NF;i++) if($i=="recommended"){print $(i+1);exit}}' \
           | tr -cd '1-9A-HJ-NP-Za-km-z')"
       W_FM[$w]="${fm:-N/A}"
       W_LM[$w]="${lm:-N/A}"
     fi
-  done <<< "$NODE_CONTAINERS"
+  done
 
   # ── Print each unique wallet with live RPC balances ──────────────────
   for w in "${W_ORD[@]}"; do
@@ -157,8 +168,7 @@ else
       fi
 
       # ── Staked NOS: parse from node startup log if shown ──
-      first_c="${W_CTRS[$w]%%,*}"
-      stk="$(docker logs "$first_c" 2>&1 | head -n 50 | _strip_ansi \
+      stk="$(docker exec "${W_OUTER[$w]}" head -n 50 "${W_LOGPATH[$w]}" 2>/dev/null | _strip_ansi \
            | awk '/[Ss]take[d]?:/{v=$NF; gsub(/[^0-9.]/,"",v); if(v+0>0){print v; exit}}')"
       [ -n "$stk" ] && stk_disp="${stk} NOS"
     fi
@@ -401,36 +411,43 @@ ping -c 4 8.8.8.8 | tail -n 2
 {
 echo ""
 _docker_ver="$(docker -v 2>/dev/null | awk '{print $1 " " $2 " " $3}' | sed 's/,$//')"
-_podman_ver="$(docker exec podman podman -v 2>/dev/null | awk '{print "podman version " $3}')"
+# Get podman version from first discovered outer container
+if [ ${#NODE_PAIRS[@]} -gt 0 ]; then
+  IFS='|' read -r _first_outer _ _ <<< "${NODE_PAIRS[0]}"
+  _podman_ver="$(docker exec "$_first_outer" podman -v 2>/dev/null | awk '{print "podman version " $3}')"
+else
+  _podman_ver="$(docker exec podman podman -v 2>/dev/null | awk '{print "podman version " $3}')"
+fi
 echo "${_docker_ver}  |  ${_podman_ver}"
 _now=$(date +%s)
 printf "Uptimes:\n"
 printf "  %-35s %s\n" "$(uptime -p | sed 's/^up //') (since $(who -b | awk '{print $3,$4}'))" "PC"
 
-# Use _find_nosana_containers (includes stopped) for uptimes
-if [ -n "$NODE_CONTAINERS" ]; then
-  while IFS= read -r _c; do
-    [ -z "$_c" ] && continue
-    _status="$(docker inspect --format '{{.State.Status}}' "$_c" 2>/dev/null)"
-    _exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$_c" 2>/dev/null)"
-    _start="$(docker inspect --format '{{.State.StartedAt}}' "$_c" 2>/dev/null | cut -d. -f1 | sed 's/T/ /')"
+# Use NODE_PAIRS for uptimes (inner nosana-node containers)
+if [ ${#NODE_PAIRS[@]} -gt 0 ]; then
+  for _pair in "${NODE_PAIRS[@]}"; do
+    IFS='|' read -r _outer _inner _logpath <<< "$_pair"
+    _label="[${_outer}] ${_inner}"
+    _status="$(docker exec "$_outer" podman inspect --format '{{.State.Status}}' "$_inner" 2>/dev/null)"
+    _exit_code="$(docker exec "$_outer" podman inspect --format '{{.State.ExitCode}}' "$_inner" 2>/dev/null)"
+    _start="$(docker exec "$_outer" podman inspect --format '{{.State.StartedAt}}' "$_inner" 2>/dev/null | cut -d. -f1 | sed 's/T/ /')"
     _start_epoch=$(date -d "${_start} UTC" +%s 2>/dev/null)
 
     if [ "$_status" = "running" ]; then
       _diff=$((_now - _start_epoch))
       _d=$((_diff/86400)); _h=$(((_diff%86400)/3600)); _m=$(((_diff%3600)/60))
-      printf "  %-35s %s\n" "${_d} days, ${_h} hours, ${_m} minutes (since ${_start} UTC)" "$_c"
+      printf "  %-35s %s\n" "${_d} days, ${_h} hours, ${_m} minutes (since ${_start} UTC)" "$_label"
     else
-      _finished="$(docker inspect --format '{{.State.FinishedAt}}' "$_c" 2>/dev/null | cut -d. -f1 | sed 's/T/ /')"
+      _finished="$(docker exec "$_outer" podman inspect --format '{{.State.FinishedAt}}' "$_inner" 2>/dev/null | cut -d. -f1 | sed 's/T/ /')"
       _fin_epoch=$(date -d "${_finished} UTC" +%s 2>/dev/null)
       _ran=$((_fin_epoch - _start_epoch))
       _rd=$((_ran/86400)); _rh=$(((_ran%86400)/3600)); _rm=$(((_ran%3600)/60))
       _ago=$((_now - _fin_epoch))
       _ad=$((_ago/86400)); _ah=$(((_ago%86400)/3600)); _am=$(((_ago%3600)/60))
       printf "  %-35s %s [STOPPED exit:%s, ran %dd %dh %dm, stopped %dd %dh %dm ago]\n" \
-        "(since ${_start} UTC)" "$_c" "$_exit_code" "$_rd" "$_rh" "$_rm" "$_ad" "$_ah" "$_am"
+        "(since ${_start} UTC)" "$_label" "$_exit_code" "$_rd" "$_rh" "$_rm" "$_ad" "$_ah" "$_am"
     fi
-  done <<< "$NODE_CONTAINERS"
+  done
 fi
 } >> mylog.txt
 #--- END SYSTEM SPECS ---
@@ -557,24 +574,13 @@ echo "" >> mylog.txt
 
 #--- BEGIN DOCKER COMMANDS ---
 docker exec podman podman -v | awk '{print "podman version " $3 " (nested in Docker)"}' >> mylog.txt
-docker exec podman podman ps >> mylog.txt
-echo "" >> mylog.txt
 echo "docker exec podman podman ps -a" >> mylog.txt
 docker exec podman podman ps -a >> mylog.txt
 echo "" >> mylog.txt
-echo "frps logs" >> mylog.txt
-docker exec podman sh -c '
-  echo "=== Log append at $(date) ==="
-  for cid in $(podman ps -q --filter "name=^frpc"); do
-    name=$(podman inspect --format "{{.Name}}" "$cid")
-    echo "========== Logs for $name ($cid) =========="
-    podman logs "$cid" | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?) ?[mGK]//g"
-    echo "==========================================="
-  done
-' >> mylog.txt
+echo "frpc-logs.sh" >> mylog.txt
+bash frpc-logs.sh >> mylog.txt
 echo "" >> mylog.txt
 docker -v >> mylog.txt
-docker ps >> mylog.txt
 echo "" >> mylog.txt
 
 PS_ALL="$(docker ps -a 2>/dev/null || true)"
@@ -600,11 +606,88 @@ _clean_docker_log() {
   perl -CSDA -pe '
     s/\e\[\??[0-9;]*[a-zA-Z]//g;
     s/\e//g;
-    s/.*([✔✖])/$1/;
+    s/.*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*([✔✖])/$1/;
     s/.*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*/  / unless /[✔✖]/;
-    $_ = substr($_, 0, 300) . "...\n" if length($_) > 300;
+    $_ = substr($_, 0, 500) . "...\n" if length($_) > 500;
     $_ = "" if /^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*$/;
   ' | tr -d '\000-\010\013\014\016-\037\177' | grep -av '^\s*$'
+}
+
+# Collapse consecutive identical lines: keep 1, summarise rest.
+# Also cleans output: truncates timestamp to seconds, strips container-log
+# prefix (stdout P/F), removes Braille spinners, collapses whitespace.
+_dedup_consecutive() {
+  perl -CSDA -ne '
+    BEGIN { $prev = ""; $count = 0; }
+    # normalise for comparison
+    $norm = $_;
+    $norm =~ s/^\d{4}-\d{2}-\d{2}T[\d:.+-]+\s+stdout\s+[PF]\s?//;
+    $norm =~ s/[\x{2800}-\x{28FF}]//g;
+    $norm =~ s/\s+/ /g;
+    $norm =~ s/^\s+|\s+$//g;
+    next if $norm eq "";
+    # clean the output line (same transforms but keep truncated timestamp)
+    $out = $_;
+    $out =~ s/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.\d+[+\-][\d:]+\s+stdout\s+[PF]\s?/$1 /;
+    $out =~ s/[\x{2800}-\x{28FF}]//g;
+    $out =~ s/\x{23F1}\s*//g;
+    $out =~ s/\x{26A1}\s*//g;
+    $out =~ s/[\x{2500}-\x{257F}\x{2580}-\x{259F}]+//g;
+    $out =~ s/[ \t]+/ /g;
+    $out =~ s/^\s+//;
+    $out =~ s/\s+$/\n/;
+    $out = "  $out";
+    if ($norm eq $prev) {
+      $count++;
+    } else {
+      printf "  [... above line repeated %d more times]\n", $count - 1 if $count > 1;
+      $prev = $norm;
+      $count = 1;
+      print $out;
+    }
+    END {
+      printf "  [... above line repeated %d more times]\n", $count - 1 if $count > 1;
+    }
+  ' | perl -ne '
+    # Collapse ticker runs (Duration ticks, RESTARTING countdowns, etc.)
+    # Keep only first + last real line per run.
+    # NOTE: avoid !$var — Perl 5.38 negation bug returns truthy ref
+    $is_tick = (/Duration:.*Max Duration:/ || /RESTARTING In \d+/ || /Downloading\s+\|.*\|.*\d+.*\//) ? 1 : 0;
+    if ($is_tick) {
+      if ($in_run) {
+        $run_count++;
+      } else {
+        $first = $_;
+        $in_run = 1;
+        $run_count = 1;
+      }
+      $last_tick = $_;
+      next;
+    }
+    if ($in_run && /^\s*\[\.\.\. above line repeated/) { next; }
+    if ($in_run) {
+      print $first;
+      if ($run_count > 2) {
+        printf "  [... %d ticks collapsed ...]\n", $run_count - 2;
+        print $last_tick;
+      } elsif ($run_count == 2) {
+        print $last_tick;
+      }
+      $in_run = 0;
+    }
+    print;
+    END {
+      if ($in_run) {
+        print $first;
+        if ($run_count > 2) {
+          printf "  [... %d ticks collapsed ...]\n", $run_count - 2;
+          print $last_tick;
+        } elsif ($run_count == 2) {
+          print $last_tick;
+        }
+      }
+    }
+  '
 }
 
 MAX_FILE_BYTES=1073741824
@@ -614,14 +697,8 @@ BYTES_PER_LINE=200
 MAX_TOTAL_LINES=$((REMAINING / BYTES_PER_LINE))
 HEAD_LINES=30
 
-# Reuse NODE_CONTAINERS from discovery (includes stopped containers)
-LOG_CONTAINERS=()
-if [ -n "$NODE_CONTAINERS" ]; then
-  while IFS= read -r _lc; do
-    [ -n "$_lc" ] && LOG_CONTAINERS+=("$_lc")
-  done <<< "$NODE_CONTAINERS"
-fi
-NUM_LOG_CONTAINERS=${#LOG_CONTAINERS[@]}
+# Reuse NODE_PAIRS from discovery
+NUM_LOG_CONTAINERS=${#NODE_PAIRS[@]}
 
 if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
   echo ""
@@ -630,14 +707,16 @@ if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
   _pass=0
 
   # ── Single scan: clean once to temp file, count from temp ──────────────
-  for _lc in "${LOG_CONTAINERS[@]}"; do
+  for _pair in "${NODE_PAIRS[@]}"; do
+    IFS='|' read -r _outer _inner _logpath <<< "$_pair"
+    _label="[${_outer}] ${_inner}"
     _pass=$((_pass + 1))
-    printf "  scanning %s (%d/%d)...\r" "$_lc" "$_pass" "$NUM_LOG_CONTAINERS"
+    printf "  scanning %s (%d/%d)...\r" "$_label" "$_pass" "$NUM_LOG_CONTAINERS"
     _tmplog=$(mktemp)
-    docker logs -t "$_lc" 2>/dev/null | _clean_docker_log > "$_tmplog"
-    LOG_TMPFILES[$_lc]="$_tmplog"
-    LOG_TOTAL_LINES[$_lc]=$(wc -l < "$_tmplog")
-    _total_all=$((_total_all + LOG_TOTAL_LINES[$_lc]))
+    docker exec "$_outer" cat "$_logpath" 2>/dev/null | _clean_docker_log | _dedup_consecutive > "$_tmplog"
+    LOG_TMPFILES[$_pair]="$_tmplog"
+    LOG_TOTAL_LINES[$_pair]=$(wc -l < "$_tmplog")
+    _total_all=$((_total_all + LOG_TOTAL_LINES[$_pair]))
   done
   printf "  scan complete: %d useful lines across %d containers              \n" "$_total_all" "$NUM_LOG_CONTAINERS"
 
@@ -648,30 +727,30 @@ if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
   declare -A LOG_ALLOC
   LEFTOVER=0
 
-  for _lc in "${LOG_CONTAINERS[@]}"; do
-    _avail=$((LOG_TOTAL_LINES[$_lc] - HEAD_LINES))
+  for _pair in "${NODE_PAIRS[@]}"; do
+    _avail=$((LOG_TOTAL_LINES[$_pair] - HEAD_LINES))
     [ "$_avail" -lt 0 ] && _avail=0
     if [ "$_avail" -le "$SHARE" ]; then
-      LOG_ALLOC[$_lc]="$_avail"
+      LOG_ALLOC[$_pair]="$_avail"
       LEFTOVER=$((LEFTOVER + SHARE - _avail))
     else
-      LOG_ALLOC[$_lc]="$SHARE"
+      LOG_ALLOC[$_pair]="$SHARE"
     fi
   done
 
   LONG_CONTAINERS=0
-  for _lc in "${LOG_CONTAINERS[@]}"; do
-    _avail=$((LOG_TOTAL_LINES[$_lc] - HEAD_LINES))
+  for _pair in "${NODE_PAIRS[@]}"; do
+    _avail=$((LOG_TOTAL_LINES[$_pair] - HEAD_LINES))
     [ "$_avail" -gt "$SHARE" ] && LONG_CONTAINERS=$((LONG_CONTAINERS + 1))
   done
 
   if [ "$LONG_CONTAINERS" -gt 0 ] && [ "$LEFTOVER" -gt 0 ]; then
     BONUS=$((LEFTOVER / LONG_CONTAINERS))
-    for _lc in "${LOG_CONTAINERS[@]}"; do
-      _avail=$((LOG_TOTAL_LINES[$_lc] - HEAD_LINES))
+    for _pair in "${NODE_PAIRS[@]}"; do
+      _avail=$((LOG_TOTAL_LINES[$_pair] - HEAD_LINES))
       if [ "$_avail" -gt "$SHARE" ]; then
-        LOG_ALLOC[$_lc]=$((LOG_ALLOC[$_lc] + BONUS))
-        [ "${LOG_ALLOC[$_lc]}" -gt "$_avail" ] && LOG_ALLOC[$_lc]="$_avail"
+        LOG_ALLOC[$_pair]=$((LOG_ALLOC[$_pair] + BONUS))
+        [ "${LOG_ALLOC[$_pair]}" -gt "$_avail" ] && LOG_ALLOC[$_pair]="$_avail"
       fi
     done
   fi
@@ -685,32 +764,36 @@ if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
     echo "NOSANA CONTAINER LOGS (${NUM_LOG_CONTAINERS} containers)"
     echo "========================================================================"
     echo "To jump to a specific container log, search for:"
-    for _lc in "${LOG_CONTAINERS[@]}"; do
-      printf "  === %s:    (%d lines)\n" "$_lc" "${LOG_TOTAL_LINES[$_lc]}"
+    for _pair in "${NODE_PAIRS[@]}"; do
+      IFS='|' read -r _outer _inner _ <<< "$_pair"
+      _label="[${_outer}] ${_inner}"
+      printf "  === %s:    (%d lines)\n" "$_label" "${LOG_TOTAL_LINES[$_pair]}"
     done
     echo "------------------------------------------------------------------------"
   } >> mylog.txt
 
-  for _lc in "${LOG_CONTAINERS[@]}"; do
-    _tmplog="${LOG_TMPFILES[$_lc]}"
+  for _pair in "${NODE_PAIRS[@]}"; do
+    IFS='|' read -r _outer _inner _ <<< "$_pair"
+    _label="[${_outer}] ${_inner}"
+    _tmplog="${LOG_TMPFILES[$_pair]}"
     printf "  writing %s: head %d + tail %d of %d lines\n" \
-      "$_lc" "$HEAD_LINES" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}"
+      "$_label" "$HEAD_LINES" "${LOG_ALLOC[$_pair]}" "${LOG_TOTAL_LINES[$_pair]}"
     {
-      _shown=$((HEAD_LINES + LOG_ALLOC[$_lc]))
-      [ "$_shown" -gt "${LOG_TOTAL_LINES[$_lc]}" ] && _shown="${LOG_TOTAL_LINES[$_lc]}"
-      _omitted=$((LOG_TOTAL_LINES[$_lc] - _shown))
+      _shown=$((HEAD_LINES + LOG_ALLOC[$_pair]))
+      [ "$_shown" -gt "${LOG_TOTAL_LINES[$_pair]}" ] && _shown="${LOG_TOTAL_LINES[$_pair]}"
+      _omitted=$((LOG_TOTAL_LINES[$_pair] - _shown))
       if [ "$_omitted" -eq 0 ]; then
         _trim_note="100% OF LOG"
       else
         _trim_note="${_omitted} lines omitted"
       fi
       printf "\n\n\n=== %s: head %d + tail %d of %d cleaned lines (%s) ===\n" \
-        "$_lc" "$HEAD_LINES" "${LOG_ALLOC[$_lc]}" "${LOG_TOTAL_LINES[$_lc]}" "$_trim_note"
+        "$_label" "$HEAD_LINES" "${LOG_ALLOC[$_pair]}" "${LOG_TOTAL_LINES[$_pair]}" "$_trim_note"
       echo "--- HEAD (first ${HEAD_LINES} lines) ---"
       head -n "$HEAD_LINES" "$_tmplog"
       echo ""
-      echo "--- TAIL (last ${LOG_ALLOC[$_lc]} lines) ---"
-      tail -n "${LOG_ALLOC[$_lc]}" "$_tmplog"
+      echo "--- TAIL (last ${LOG_ALLOC[$_pair]} lines) ---"
+      tail -n "${LOG_ALLOC[$_pair]}" "$_tmplog"
     } >> mylog.txt
     rm -f "$_tmplog"
   done
@@ -739,8 +822,15 @@ fi
 
 FILE_SIZE=$(wc -c < "$TEXT_FILE" | tr -d ' ')
 
-# Sanitize: strip any stray binary/control bytes so Slack shows inline text preview
-perl -CSDA -pi -e 's/[^\x09\x0A\x0D\x20-\x7E\x{80}-\x{10FFFF}]//g' "$TEXT_FILE"
+# Sanitize: strip control bytes + replace remaining non-ASCII → pure 7-bit ASCII
+# so Slack reliably detects text and shows inline preview
+perl -CSDA -pi -e '
+  s/\x{2714}/[OK]/g;       # ✔
+  s/\x{2716}/[FAIL]/g;     # ✖
+  s/\x{2026}/.../g;        # …
+  s/\x{00B0}/deg/g;        # °
+  s/[^\x09\x0A\x0D\x20-\x7E]//g;  # strip anything else non-ASCII
+' "$TEXT_FILE"
 FILE_SIZE=$(wc -c < "$TEXT_FILE" | tr -d ' ')
 
 # ------------- UPLOAD (both independent -- one failure doesn't block the other) -------------
@@ -770,11 +860,36 @@ fi
 printf "  stage2: "
 DISCORD_NAME_ESC=$(echo "$DISCORD_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
-# Step 1: Get upload URL
+# Truncate for Slack inline preview (Slack won't preview files > ~1MB)
+SLACK_MAX_BYTES=500000
+SLACK_FILE="$TEXT_FILE"
+if [ "$FILE_SIZE" -gt "$SLACK_MAX_BYTES" ]; then
+    SLACK_FILE=$(mktemp --suffix=.txt)
+    TOTAL_LINES=$(wc -l < "$TEXT_FILE")
+    # Keep head (system summary) + tail (recent logs), stay under limit
+    HEAD_LINES=400
+    TAIL_LINES=2000
+    LINES_TRUNCATED=$((TOTAL_LINES - HEAD_LINES - TAIL_LINES))
+    {
+      head -n "$HEAD_LINES" "$TEXT_FILE"
+      if [ "$LINES_TRUNCATED" -gt 0 ]; then
+        printf "\n... [%d lines truncated — full log uploaded to Litterbox] ...\n\n" \
+          "$LINES_TRUNCATED"
+      fi
+      tail -n "$TAIL_LINES" "$TEXT_FILE"
+    } > "$SLACK_FILE"
+    # If still too large, hard-truncate to byte limit
+    if [ "$(wc -c < "$SLACK_FILE")" -gt "$SLACK_MAX_BYTES" ]; then
+        truncate -s "$SLACK_MAX_BYTES" "$SLACK_FILE"
+    fi
+fi
+SLACK_FILE_SIZE=$(wc -c < "$SLACK_FILE" | tr -d ' ')
+
+# Step 1: Get upload URL (filename + length only; snippet_type not supported)
 GET_RESPONSE=$(curl -s --max-time 15 -X POST \
   -H "Authorization: Bearer $mana" \
   -F "filename=$SLACK_FILENAME" \
-  -F "length=$FILE_SIZE" \
+  -F "length=$SLACK_FILE_SIZE" \
   https://slack.com/api/files.getUploadURLExternal)
 
 UPLOAD_URL_SLACK=$(echo "$GET_RESPONSE" | jq -r '.upload_url // empty')
@@ -787,7 +902,7 @@ if [[ -z "$UPLOAD_URL_SLACK" || -z "$FILE_ID" ]]; then
 else
     # Step 2: Upload file content
     curl -s --max-time 30 -X POST \
-      -F "file=@$TEXT_FILE" \
+      -F "file=@$SLACK_FILE;type=text/plain" \
       "$UPLOAD_URL_SLACK" > /dev/null
 
     # Step 3: Complete upload and share to channel
@@ -819,6 +934,9 @@ else
         ERRORS="${ERRORS}  Slack: complete failed - ${SLACK_ERR2:-unknown}\n"
     fi
 fi
+
+# Clean up truncated temp file if created
+[[ "$SLACK_FILE" != "$TEXT_FILE" ]] && rm -f "$SLACK_FILE"
 
 # ── Summary ──────────────────────────────────────────────────────────────
 if [[ -z "$ERRORS" ]]; then
@@ -868,16 +986,17 @@ awk '/^podman version/{exit} {print}' mylog.txt
 #   will force a file download instead of showing a browser preview link.
 #
 # ── CONTAINER DISCOVERY ────────────────────────────────────────────────────
-# - Uses docker ps -a as PRIMARY (not fallback) to find both running AND
-#   stopped containers with "nosana" anywhere in the container name.
-# - This catches all naming conventions: nosana-node, nosana-node.gpu0,
-#   nosana-node.gpu1, nosana-node1, nosana-mymachine, etc.
-# - Last-resort fallback: docker inspect nosana-node (only catches that
-#   exact literal name; used if docker ps -a returns nothing).
-# - docker logs works on stopped containers -- wallet, markets, and full
-#   log history are still accessible after docker stop.
-# - Stopped containers show: exit code (0=clean stop, 137=OOM/killed,
-#   1=error), how long it ran, and how long ago it stopped.
+# - Uses IMAGE-BASED detection (not name-based grep):
+#   1. Outer: docker ps --format | grep 'nosana/podman' → finds Docker containers
+#   2. Inner: docker exec $outer podman ps --format | grep 'nosana/nosana-node'
+#   3. Logpath: podman inspect --format='{{.HostConfig.LogConfig.Path}}' $inner
+# - Returns outer|inner|logpath triples in NODE_PAIRS array.
+# - Reads logs via direct file access: docker exec $outer head/tail/cat $logpath
+# - This bypasses `podman logs` (which can hang) and `docker logs` (which
+#   only sees the outer container's log, not the inner nosana-node).
+# - Works for all node configurations: nn01 multi-GPU (podman-gpu0/1/2),
+#   single-podman nodes (nn02-nn06), and future configurations.
+# - Stopped inner containers show: exit code, runtime, and time since stop.
 #
 # ── WALLETS & BALANCES ─────────────────────────────────────────────────────
 # - Each container has a unique wallet. One GPU per container currently.
@@ -936,6 +1055,23 @@ awk '/^podman version/{exit} {print}' mylog.txt
 # - HEAD_LINES=30 per container for startup info, rest allocated to tail.
 # - Navigation header before logs lists all containers with line counts
 #   and search terms (=== container_name:) for jumping in any text viewer.
+#
+# ── LOG DEDUPLICATION ──────────────────────────────────────────────────────
+# - Raw podman log lines have a container-log prefix (timestamp + stdout P)
+#   that makes every line unique, plus Braille spinner chars (U+2800-28FF)
+#   that differ per animation frame. Empty spinner frames (prefix-only lines)
+#   are interleaved between content lines.
+# - _dedup_consecutive (perl -CSDA) normalises each line for comparison:
+#   strips the timestamp+stdout prefix, strips Braille chars, collapses
+#   whitespace. Empty-after-normalisation lines are dropped entirely.
+# - Only the first occurrence of each consecutive identical run is kept
+#   (with cleaned output: second-precision timestamp, no stdout P, no
+#   spinners, 2-space indent); then a summary "  [... above line repeated
+#   N more times]" is emitted for runs of 2+.
+# - Output lines are cleaned: timestamp truncated to seconds, container-log
+#   prefix (stdout P/F) stripped, Braille spinners removed, whitespace
+#   collapsed, 2-space indent added.
+# - Typical reduction: 7M lines → ~30K-50K lines (531MB → ~10-15MB).
 #
 # ── SCRIPT CONVENTIONS ─────────────────────────────────────────────────────
 # - Version number format: v0.00.XX, incremented with each edit.
