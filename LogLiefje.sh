@@ -65,7 +65,7 @@ SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
 
 echo ""
 printf "\033[1;33mPaste the error you saw, or describe the issue.\033[0m\n"
-printf "\033[1;33mPress Enter twice when done (or once to skip):\033[0m\n"
+printf "\033[1;33mPress Enter twice when done:\033[0m\n"
 OPERATOR_ERROR=""
 while IFS= read -r _line; do
   [[ -z "$_line" ]] && break
