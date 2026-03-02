@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.85" >> mylog.txt   # ← incremented
+echo "log collector v0.00.86" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- ARGUMENT PARSING -------------
