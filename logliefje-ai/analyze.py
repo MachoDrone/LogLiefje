@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.02.0
+Version: 0.02.3
 """
 
 import json
@@ -21,7 +21,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.02.2"
+VERSION = "0.02.3"
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "error-report.txt")
@@ -305,12 +305,15 @@ def keyword_scan(sections, keywords_data, patterns_data, false_positives_data):
     for section_name, section_lines, start_line in sections:
         section_text = "\n".join(section_lines)
 
+        container_short = _short_container_name(section_name)
+
         # Check multi-line patterns first
         for pat in patterns:
             try:
                 matches = list(re.finditer(pat["regex"], section_text, re.IGNORECASE))
                 if matches:
                     found_errors.append({
+                        "keyword": pat["name"].replace("_", " "),
                         "pattern": pat["name"].replace("_", " "),
                         "severity": pat["severity"],
                         "category": pat.get("category", "unknown"),
@@ -318,7 +321,9 @@ def keyword_scan(sections, keywords_data, patterns_data, false_positives_data):
                         "action": "",
                         "count": len(matches),
                         "container": section_name,
+                        "container_short": container_short,
                         "line_ref": start_line + section_text[:matches[0].start()].count("\n"),
+                        "timestamp": "",
                         "is_novel": False,
                     })
             except re.error:
@@ -339,14 +344,17 @@ def keyword_scan(sections, keywords_data, patterns_data, false_positives_data):
             for pattern, kw in kw_list:
                 if pattern.lower() in line_lower:
                     found_errors.append({
-                        "pattern": line.strip()[:200],
+                        "keyword": pattern,
+                        "pattern": pattern,
                         "severity": kw["severity"],
                         "category": kw.get("category", "unknown"),
                         "cause": kw["description"],
                         "action": "",
                         "count": 1,
                         "container": section_name,
+                        "container_short": container_short,
                         "line_ref": start_line + i,
+                        "timestamp": _extract_timestamp(line),
                         "is_novel": False,
                     })
                     matched = True
@@ -373,16 +381,44 @@ def _looks_like_error(line):
     return any(hint in line_lower for hint in error_hints)
 
 
+def _extract_timestamp(line):
+    """Extract ISO timestamp from beginning of a log line."""
+    m = re.match(r"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})", line.strip())
+    return m.group(1) if m else ""
+
+
+def _short_container_name(section_name):
+    """Extract short container name from full section header.
+
+    e.g. '[podman] nosana-node: last 200 lines' -> '[podman] nosana-node'
+    """
+    # Strip trailing ': last N lines' or similar
+    name = re.sub(r":\s*(last\s+)?\d+\s+lines?.*$", "", section_name, flags=re.IGNORECASE)
+    return name.strip()
+
+
 def _dedup_errors(errors):
-    """Deduplicate errors by (pattern_prefix, container), summing counts."""
+    """Deduplicate errors by (keyword, container), consolidating counts and refs."""
     key_map = {}
     for err in errors:
-        # Use first 80 chars of pattern + container as dedup key
-        key = (err["pattern"][:80].lower(), err.get("container", ""))
+        keyword = err.get("keyword", err["pattern"])
+        key = (keyword[:80].lower(), err.get("container", ""))
         if key in key_map:
-            key_map[key]["count"] += err["count"]
+            entry = key_map[key]
+            entry["count"] += err["count"]
+            if err.get("line_ref"):
+                entry.setdefault("line_refs", []).append(err["line_ref"])
+            ts = err.get("timestamp", "")
+            if ts:
+                entry.setdefault("timestamps", []).append(ts)
         else:
-            key_map[key] = err.copy()
+            entry = err.copy()
+            entry["pattern"] = keyword
+            lr = entry.pop("line_ref", "")
+            entry["line_refs"] = [lr] if lr else []
+            ts = entry.pop("timestamp", "")
+            entry["timestamps"] = [ts] if ts else []
+            key_map[key] = entry
     return list(key_map.values())
 
 
@@ -511,6 +547,15 @@ def run_keyword_discovery(unclassified, existing_keywords):
     ]
 
 
+def _already_covered(new_pat, existing_patterns):
+    """Check if new_pat is a substring of or contains an existing pattern."""
+    new_lower = new_pat.lower()
+    for ep in existing_patterns:
+        if new_lower in ep or ep in new_lower:
+            return True
+    return False
+
+
 def build_error_list(keyword_errors, llm_interpretations, novel_keywords):
     """Merge keyword scan results with LLM interpretations into final error list."""
     errors = []
@@ -522,7 +567,7 @@ def build_error_list(keyword_errors, llm_interpretations, novel_keywords):
         interp_map[pat] = interp
 
     for err in keyword_errors:
-        key = err["pattern"].lower()[:80]
+        key = err.get("keyword", err["pattern"]).lower()[:80]
         if key in interp_map:
             llm = interp_map[key]
             err["cause"] = llm.get("cause", err.get("cause", ""))
@@ -530,10 +575,12 @@ def build_error_list(keyword_errors, llm_interpretations, novel_keywords):
         errors.append(err)
 
     # Add novel errors from LLM (not already in keyword results)
-    existing_patterns = {e["pattern"].lower()[:80] for e in errors}
+    existing_patterns = {e.get("keyword", e["pattern"]).lower()[:80] for e in errors}
     for interp in llm_interpretations:
-        if interp.get("is_novel") and interp.get("pattern", "").lower()[:80] not in existing_patterns:
+        pat = interp.get("pattern", "").lower()[:80]
+        if interp.get("is_novel") and not _already_covered(pat, existing_patterns):
             errors.append({
+                "keyword": interp.get("pattern", ""),
                 "pattern": interp.get("pattern", ""),
                 "severity": interp.get("severity", "WARN"),
                 "category": interp.get("category", "unknown"),
@@ -541,15 +588,22 @@ def build_error_list(keyword_errors, llm_interpretations, novel_keywords):
                 "action": interp.get("action", ""),
                 "count": interp.get("count", 1),
                 "container": "",
-                "line_ref": "",
+                "container_short": "",
+                "line_refs": [],
+                "timestamps": [],
                 "is_novel": True,
             })
+            existing_patterns.add(pat)
+
+    # Rebuild existing_patterns after adding LLM novel entries
+    existing_patterns = {e.get("keyword", e["pattern"]).lower()[:80] for e in errors}
 
     # Add novel keywords as NEW entries
     for kw in novel_keywords:
         pat = kw.get("pattern", "").lower()[:80]
-        if pat not in existing_patterns:
+        if not _already_covered(pat, existing_patterns):
             errors.append({
+                "keyword": kw.get("pattern", ""),
                 "pattern": kw.get("pattern", ""),
                 "severity": kw.get("severity", "WARN"),
                 "category": kw.get("category", "unknown"),
@@ -557,9 +611,13 @@ def build_error_list(keyword_errors, llm_interpretations, novel_keywords):
                 "action": "New pattern discovered by AI — monitor frequency",
                 "count": 1,
                 "container": "",
-                "line_ref": "",
+                "container_short": "",
+                "line_refs": [],
+                "timestamps": [],
                 "is_novel": True,
+                "confidence": kw.get("confidence", 0),
             })
+            existing_patterns.add(pat)
 
     # Sort by severity
     sev_order = {"FATAL": 0, "ERROR": 1, "WARN": 2, "STATE": 3, "INFO": 4, "NEW": 5}

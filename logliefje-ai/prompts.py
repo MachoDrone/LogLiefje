@@ -68,7 +68,10 @@ IMPORTANT:
 - Only suggest novel_keywords for patterns you actually found in the logs
 - Set confidence 0.7-1.0 based on how certain you are this is a real error pattern
 - Do NOT include patterns already in the known keywords list
-- Keep patterns specific enough to avoid false positives"""
+- Keep patterns specific enough to avoid false positives
+- Do NOT include specific IDs, hashes, wallet addresses, Solana pubkeys, or transaction signatures in novel patterns
+- Use the shortest unique substring that reliably matches the error class
+- If a novel keyword is a specific instance of a general pattern, only report the general one"""
 
 KEYWORD_DISCOVERY_PROMPT = """\
 Review these log lines that were NOT matched by any known error keyword.
@@ -96,6 +99,7 @@ For each new error pattern you find, respond in this JSON format:
 Rules:
 - Only include patterns that represent REAL errors (not info messages, not success messages)
 - The pattern should be the shortest unique substring that reliably matches the error
+- Strip specific IDs, hashes, wallet addresses, Solana pubkeys, and transaction signatures from patterns
 - Confidence: 0.9+ for obvious errors, 0.7-0.9 for likely errors, skip below 0.7
 - Do NOT include patterns that match normal operation or success messages
 - If no new patterns found, return {{"novel_keywords": []}}"""

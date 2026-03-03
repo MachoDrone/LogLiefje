@@ -1,7 +1,53 @@
 """Error report formatter for LogLiefje AI."""
 
+import re
 import time
 from collections import defaultdict
+
+
+def _format_date_range(timestamps):
+    """Format a list of ISO timestamps into a compact date range.
+
+    Returns 'Feb 25 - Mar 3', 'Mar 1', or '' if no timestamps.
+    """
+    if not timestamps:
+        return ""
+    # Parse dates from timestamps (format: 2026-02-25T10:30:00 or 2026-02-25 10:30:00)
+    dates = set()
+    for ts in timestamps:
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(ts))
+        if m:
+            dates.add((int(m.group(1)), int(m.group(2)), int(m.group(3))))
+    if not dates:
+        return ""
+
+    months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    sorted_dates = sorted(dates)
+    first = sorted_dates[0]
+    last = sorted_dates[-1]
+
+    if first == last:
+        return f"{months[first[1]]} {first[2]}"
+    if first[1] == last[1] and first[0] == last[0]:
+        return f"{months[first[1]]} {first[2]} - {last[2]}"
+    return f"{months[first[1]]} {first[2]} - {months[last[1]]} {last[2]}"
+
+
+def _format_line_refs(line_refs):
+    """Format line references as a compact list, capped at 5.
+
+    Returns '~203, ~211, ~380, ~533, ~915 (+6 more)' or ''.
+    """
+    refs = [r for r in line_refs if r]
+    if not refs:
+        return ""
+    refs_sorted = sorted(set(refs))
+    shown = refs_sorted[:5]
+    parts = ", ".join(f"~{r}" for r in shown)
+    if len(refs_sorted) > 5:
+        parts += f" (+{len(refs_sorted) - 5} more)"
+    return parts
 
 
 def format_report(
@@ -15,22 +61,7 @@ def format_report(
     keywords_loaded=0,
     keywords_new=0,
 ):
-    """Format the final error report.
-
-    Args:
-        errors: list of error dicts with severity, pattern, cause, action, count, container
-        novel_keywords: list of newly discovered keyword dicts
-        healthy_signals: list of healthy signal strings
-        summary: one-line health assessment
-        node_id: hostname or identifier
-        model_name: LLM model used
-        inference_mode: "gpu" or "cpu"
-        keywords_loaded: number of keywords loaded from repo
-        keywords_new: number of new keywords discovered
-
-    Returns:
-        Formatted report string
-    """
+    """Format the final error report."""
     lines = []
     ts = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
@@ -55,7 +86,7 @@ def format_report(
     unique_errors = len(errors)
     containers = set()
     for err in errors:
-        c = err.get("container", "")
+        c = err.get("container_short", err.get("container", ""))
         if c:
             containers.add(c)
 
@@ -68,24 +99,49 @@ def format_report(
             if sev not in errors_by_severity:
                 continue
             for err in errors_by_severity[sev]:
-                container = err.get("container", "unknown")
-                count = err.get("count", 1)
-                count_str = f"  ({count}x)" if count > 1 else ""
-
                 tag = sev
                 if err.get("is_novel"):
                     tag = "NEW"
 
-                lines.append(f"[{tag}] {container}{count_str}")
+                if err.get("is_novel"):
+                    # Novel entries: simple [NEW] header
+                    lines.append(f"[{tag}]")
+                else:
+                    # Known errors: [SEV] short_container (Nx, date range)
+                    container_short = err.get("container_short", err.get("container", "unknown"))
+                    count = err.get("count", 1)
+                    date_range = _format_date_range(err.get("timestamps", []))
+
+                    meta_parts = []
+                    if count > 1:
+                        meta_parts.append(f"{count}x")
+                    if date_range:
+                        meta_parts.append(date_range)
+                    meta_str = f" ({', '.join(meta_parts)})" if meta_parts else ""
+
+                    lines.append(f"[{tag}] {container_short}{meta_str}")
+
+                # Error text (keyword, not full log line)
                 lines.append(f"  {err.get('pattern', 'unknown error')}")
+
                 if err.get("cause"):
                     lines.append(f"  CAUSE: {err['cause']}")
                 if err.get("action"):
                     lines.append(f"  ACTION: {err['action']}")
-                if err.get("line_ref"):
-                    lines.append(f"  -> Context at mylogs.txt line ~{err['line_ref']}")
+
+                # Line refs (consolidated list)
+                ref_str = _format_line_refs(err.get("line_refs", []))
+                if ref_str:
+                    lines.append(f"  -> Lines: {ref_str}")
+
+                # Novel keyword info with confidence
                 if err.get("is_novel") and err.get("pattern"):
-                    lines.append(f"  -> New keyword added: \"{err['pattern']}\"")
+                    conf = err.get("confidence", 0)
+                    if conf:
+                        lines.append(f"  -> New keyword added: \"{err['pattern']}\" (confidence: {conf:.0%})")
+                    else:
+                        lines.append(f"  -> New keyword added: \"{err['pattern']}\"")
+
                 lines.append("")
     else:
         lines.append("=== NO ERRORS FOUND ===")
@@ -100,14 +156,7 @@ def format_report(
             lines.append(f"  - {signal}")
         lines.append("")
 
-    # Novel keyword summary
-    if novel_keywords:
-        lines.append(f"=== NEW PATTERNS DISCOVERED ({len(novel_keywords)}) ===")
-        for kw in novel_keywords:
-            conf = kw.get("confidence", 0)
-            lines.append(f"  + \"{kw.get('pattern', '')}\" [{kw.get('severity', 'INFO')}] (confidence: {conf:.0%})")
-            lines.append(f"    {kw.get('description', '')}")
-        lines.append("")
+    # NEW PATTERNS DISCOVERED section removed — already shown as [NEW] entries above
 
     lines.append("=" * 60)
     lines.append("  END REPORT")

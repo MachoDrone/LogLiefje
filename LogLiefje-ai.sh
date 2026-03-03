@@ -2,7 +2,7 @@
 #--use: bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje-ai.sh)
 # --cache-buster: bash <(wget -qO- "https://raw.githubusercontent.com/MachoDrone/LogLiefje/main/LogLiefje-ai.sh?$(date +%s)")
 # LogLiefje AI — one-command log collection + AI error analysis + upload
-# v0.02.2
+# v0.02.3
 
 # ── Cleanup mode: remove cached image + model volume ─────────────────────
 if [[ "$1" == "--cleanup" ]]; then
@@ -74,8 +74,8 @@ echo "$DISCORD_NAME" > "$CONFIG_FILE"
 
 SAFE_NAME=$(echo "$DISCORD_NAME" | tr -cd 'a-zA-Z0-9._-')
 UTC_TS=$(date -u +%Y%m%d_%H%M%SZ)
-SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
-AI_FILENAME="${SAFE_NAME}_${UTC_TS}_ai-report.txt"
+SLACK_FILENAME="${SAFE_NAME}-RAW-${UTC_TS}.txt"
+AI_FILENAME="${SAFE_NAME}-AI-${UTC_TS}.txt"
 
 # ================================================
 # === STEP 1: COLLECT LOGS (via LogLiefje.sh) =====
@@ -319,11 +319,7 @@ if [ ${#FILE_IDS[@]} -gt 0 ]; then
     FILES_JSON=$(IFS=,; echo "${FILE_IDS[*]}")
 
     if [ -n "$UPLOAD_URL" ]; then
-      if [ -n "$MERGED_CONTENT" ]; then
-        SLACK_COMMENT="<@${USER_ID}> (link expires in ${EXPIRATION}): <${UPLOAD_URL}|${DISCORD_NAME_ESC} - raw logs>"
-      else
-        SLACK_COMMENT="<@${USER_ID}> (link expires in ${EXPIRATION}): <${UPLOAD_URL}|${DISCORD_NAME_ESC}>"
-      fi
+      SLACK_COMMENT="<@${USER_ID}> (link expires in ${EXPIRATION}): <${UPLOAD_URL}|${DISCORD_NAME_ESC}>"
     else
       SLACK_COMMENT="<@${USER_ID}> ${DISCORD_NAME_ESC} (Litterbox upload failed)"
     fi
