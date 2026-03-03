@@ -2,7 +2,7 @@
 #--use: bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje-ai.sh)
 # --cache-buster: bash <(wget -qO- "https://raw.githubusercontent.com/MachoDrone/LogLiefje/main/LogLiefje-ai.sh?$(date +%s)")
 # LogLiefje AI — one-command log collection + AI error analysis + upload
-# v0.02.5
+# v0.02.6
 
 # ── Cleanup mode: remove cached image + model volume ─────────────────────
 if [[ "$1" == "--cleanup" ]]; then
@@ -24,6 +24,7 @@ if ! command -v jq &>/dev/null; then
 fi
 
 IMAGE_NAME="logliefje-ai:latest"
+AI_VERSION="0.02.6"
 GITHUB_BRANCH="${LOGLIEFJE_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/${GITHUB_BRANCH}"
 EXPIRATION="72h"
@@ -102,10 +103,21 @@ echo "Log collection complete."
 if ! command -v docker &>/dev/null; then
     echo "Docker not available — skipping AI analysis."
 else
-    # ── Build image if it doesn't exist ──────────────────────────────────
-    if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+    # ── Build image if missing or outdated ──────────────────────────────
+    NEEDS_BUILD=false
+    BUILT_VERSION=$(docker inspect --format '{{index .Config.Labels "logliefje.version"}}' "$IMAGE_NAME" 2>/dev/null)
+    if [ "$BUILT_VERSION" = "$AI_VERSION" ]; then
+        : # image is current
+    elif [ -z "$BUILT_VERSION" ] || [ "$BUILT_VERSION" = "<no value>" ]; then
         echo "First run — building AI image (~500MB, no model baked in)..."
+        NEEDS_BUILD=true
+    else
+        echo "AI image outdated (v${BUILT_VERSION} → v${AI_VERSION}) — rebuilding..."
+        docker rmi "$IMAGE_NAME" 2>/dev/null
+        NEEDS_BUILD=true
+    fi
 
+    if [ "$NEEDS_BUILD" = true ]; then
         # Use local logliefje-ai/ directory if available, otherwise download
         if [[ -d "${SCRIPT_DIR}/logliefje-ai" && -f "${SCRIPT_DIR}/logliefje-ai/Dockerfile" ]]; then
             echo "  Using local logliefje-ai/ directory..."

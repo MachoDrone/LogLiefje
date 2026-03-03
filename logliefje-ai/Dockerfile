@@ -1,5 +1,5 @@
 # LogLiefje AI — Nosana node log analysis container
-# v0.02.1
+# v0.02.2
 #
 # Multi-stage build: copies only the ollama binary (~40MB) from the official
 # image, skipping ~4.5GB of CUDA/ROCm/Vulkan libs. GPU access is provided
@@ -37,6 +37,9 @@ RUN chmod +x entrypoint.sh
 # /input/mylogs.txt  — log file to analyze (read-only)
 # /root/.ollama      — model cache (persists via Docker volume)
 VOLUME ["/input", "/root/.ollama"]
+
+# Version label (checked by LogLiefje-ai.sh for auto-rebuild)
+LABEL logliefje.version="0.02.6"
 
 # Environment
 ENV PYTHONUNBUFFERED=1
