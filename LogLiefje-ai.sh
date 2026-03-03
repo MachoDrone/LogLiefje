@@ -2,7 +2,7 @@
 #--use: bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje-ai.sh)
 # --cache-buster: bash <(wget -qO- "https://raw.githubusercontent.com/MachoDrone/LogLiefje/main/LogLiefje-ai.sh?$(date +%s)")
 # LogLiefje AI — one-command log collection + AI error analysis + upload
-# v0.02.0
+# v0.02.1
 
 # ── Cleanup mode: remove cached image + model volume ─────────────────────
 if [[ "$1" == "--cleanup" ]]; then
@@ -33,9 +33,11 @@ REPORT_END_MARKER="===LOGLIEFJE_REPORT_END==="
 
 # ------------- ARGUMENT PARSING -------------
 TEST_MODE=false
+FORCE_CPU=false
 for arg in "$@"; do
   case "$arg" in
     --test) TEST_MODE=true ;;
+    --cpu)  FORCE_CPU=true ;;
   esac
 done
 
@@ -136,7 +138,11 @@ else
     # ── Run AI container (stdout = report, stderr = diagnostics) ─────────
     if docker image inspect "$IMAGE_NAME" &>/dev/null; then
         GPU_FLAG=""
-        if nvidia-smi &>/dev/null 2>&1; then
+        FORCE_CPU_ENV=""
+        if [ "$FORCE_CPU" = true ]; then
+            echo "Running AI analysis (CPU mode — forced via --cpu)..."
+            FORCE_CPU_ENV="-e FORCE_CPU=1"
+        elif nvidia-smi &>/dev/null 2>&1; then
             GPU_FLAG="--gpus all"
             echo "Running AI analysis (GPU mode)..."
         else
@@ -144,7 +150,7 @@ else
         fi
 
         # Capture stdout only (has report markers); stderr goes to terminal
-        DOCKER_STDOUT=$(timeout 600 docker run --rm $GPU_FLAG \
+        DOCKER_STDOUT=$(timeout 600 docker run --rm $GPU_FLAG $FORCE_CPU_ENV \
             -v "$(pwd)/mylog.txt:/input/mylogs.txt:ro" \
             -v logliefje-model-cache:/root/.ollama \
             ${GITHUB_TOKEN:+-e GITHUB_TOKEN="$GITHUB_TOKEN"} \
