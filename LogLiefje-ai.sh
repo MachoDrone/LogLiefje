@@ -113,7 +113,6 @@ else
         NEEDS_BUILD=true
     else
         echo "AI image outdated (v${BUILT_VERSION} → v${AI_VERSION}) — rebuilding..."
-        docker rmi "$IMAGE_NAME" 2>/dev/null
         NEEDS_BUILD=true
     fi
 
