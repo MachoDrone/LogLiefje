@@ -21,7 +21,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.02.0"
+VERSION = "0.02.1"
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "error-report.txt")
@@ -49,6 +49,10 @@ def get_inference_mode():
     is currently using the GPU (any inner podman container that's not
     nosana-node and not frpc-*).
     """
+    # Check for forced CPU mode (--cpu flag)
+    if os.environ.get("FORCE_CPU"):
+        return "cpu"
+
     # Check if GPU is available at all
     try:
         result = subprocess.run(
