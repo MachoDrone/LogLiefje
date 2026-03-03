@@ -1,5 +1,9 @@
 # LogLiefje AI — Nosana node log analysis container
-# v0.02.0
+# v0.02.1
+#
+# Multi-stage build: copies only the ollama binary (~40MB) from the official
+# image, skipping ~4.5GB of CUDA/ROCm/Vulkan libs. GPU access is provided
+# at runtime via --gpus all and the NVIDIA Container Toolkit.
 #
 # Build:  docker build -t logliefje-ai:latest ./logliefje-ai/
 # Run:    docker run --rm [--gpus all] \
@@ -8,18 +12,21 @@
 #           -e GITHUB_TOKEN=... \
 #           logliefje-ai:latest
 
+# Stage 1: Extract ollama binary from official image
+FROM ollama/ollama:latest AS ollama-src
+
+# Stage 2: Minimal runtime
 FROM python:3.11-slim
 
-# Install system dependencies
+# Copy only the ollama binary (skip CUDA/ROCm/Vulkan libs)
+COPY --from=ollama-src /bin/ollama /usr/local/bin/ollama
+
+# System deps (git for keyword_sync, curl for API calls)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     ca-certificates \
-    zstd \
     && rm -rf /var/lib/apt/lists/*
-
-# Install ollama (binary only, ~100MB — model pulled at runtime)
-RUN curl -fsSL https://ollama.com/install.sh | sh
 
 # Copy application code
 WORKDIR /app
