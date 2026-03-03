@@ -143,27 +143,24 @@ else
             echo "Running AI analysis (CPU mode)..."
         fi
 
-        # Capture stdout (report) separately from stderr (diagnostics)
-        DOCKER_OUTPUT=$(timeout 600 docker run --rm $GPU_FLAG \
+        # Capture stdout only (has report markers); stderr goes to terminal
+        DOCKER_STDOUT=$(timeout 600 docker run --rm $GPU_FLAG \
             -v "$(pwd)/mylog.txt:/input/mylogs.txt:ro" \
             -v logliefje-model-cache:/root/.ollama \
             ${GITHUB_TOKEN:+-e GITHUB_TOKEN="$GITHUB_TOKEN"} \
-            "$IMAGE_NAME" 2>&1)
+            "$IMAGE_NAME")
         DOCKER_EXIT=$?
 
         if [[ $DOCKER_EXIT -eq 0 ]]; then
-            # Extract report between markers
-            AI_REPORT=$(echo "$DOCKER_OUTPUT" | sed -n "/${REPORT_MARKER}/,/${REPORT_END_MARKER}/p" | grep -v "$REPORT_MARKER" | grep -v "$REPORT_END_MARKER")
+            # Extract report between markers (stdout only, no stderr noise)
+            AI_REPORT=$(printf '%s\n' "$DOCKER_STDOUT" | sed -n "/${REPORT_MARKER}/,/${REPORT_END_MARKER}/p" | grep -v "$REPORT_MARKER" | grep -v "$REPORT_END_MARKER")
             if [[ -n "$AI_REPORT" ]]; then
                 echo "AI analysis complete."
             else
                 echo "AI analysis completed but no report extracted."
             fi
-            # Show diagnostic output (everything outside the markers)
-            echo "$DOCKER_OUTPUT" | sed "/${REPORT_MARKER}/,/${REPORT_END_MARKER}/d" | tail -5
         else
             echo "AI analysis failed or timed out (exit $DOCKER_EXIT)."
-            echo "$DOCKER_OUTPUT" | tail -5
         fi
     fi
 fi
