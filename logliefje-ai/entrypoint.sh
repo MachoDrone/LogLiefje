@@ -1,6 +1,6 @@
 #!/bin/bash
 # LogLiefje AI container entrypoint
-# v0.02.0 — runtime model pull, stdout report output
+# v0.02.1 — mode-aware model selection (3b CPU / 7b GPU)
 set -e
 
 echo "=== LogLiefje AI Container ===" >&2
@@ -25,12 +25,21 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# Check if model is already cached in the volume
-if ollama list 2>/dev/null | grep -q "qwen2.5:7b"; then
-    echo "Model qwen2.5:7b found in cache — skipping download" >&2
+# Select model based on CPU/GPU mode
+if [ "${FORCE_CPU}" = "1" ]; then
+    MODEL="qwen2.5:3b"
+    MODEL_SIZE="~2GB"
 else
-    echo "First run — downloading qwen2.5:7b (~4.5GB)..." >&2
-    ollama pull qwen2.5:7b >&2
+    MODEL="qwen2.5:7b"
+    MODEL_SIZE="~4.5GB"
+fi
+
+# Check if model is already cached in the volume
+if ollama list 2>/dev/null | grep -q "$MODEL"; then
+    echo "Model $MODEL found in cache — skipping download" >&2
+else
+    echo "First run — downloading $MODEL ($MODEL_SIZE)..." >&2
+    ollama pull "$MODEL" >&2
     echo "Model download complete" >&2
 fi
 

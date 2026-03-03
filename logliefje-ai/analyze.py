@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.02.0
+Version: 0.02.3
 """
 
 import json
@@ -13,6 +13,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -21,18 +22,19 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.02.2"
+VERSION = "0.02.3"
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "error-report.txt")
 REPORT_MARKER = "===LOGLIEFJE_REPORT_START==="
 REPORT_END_MARKER = "===LOGLIEFJE_REPORT_END==="
 OLLAMA_URL = "http://localhost:11434"
-MODEL_NAME = "qwen2.5:7b"
+MODEL_NAME_GPU = "qwen2.5:7b"
+MODEL_NAME_CPU = "qwen2.5:3b"
+MODEL_NAME = MODEL_NAME_GPU  # set after get_inference_mode()
 MAX_LOG_LINES_TO_LLM = 500
 MAX_UNCLASSIFIED_LINES = 200
 KEYWORD_CONFIDENCE_THRESHOLD = 0.7
-VRAM_THRESHOLD_MIB = 6200
 
 
 def get_node_id():
@@ -44,20 +46,20 @@ def get_node_id():
 
 
 def get_inference_mode():
-    """Determine GPU vs CPU inference with 5-step priority.
+    """Determine GPU vs CPU inference.
 
+    Host already checks Nosana job status and VRAM — passes FORCE_CPU=1.
+    Container only checks:
     1. FORCE_CPU env var → CPU
-    2. nvidia-smi missing → CPU
-    3. VRAM < VRAM_THRESHOLD_MIB free → CPU
-    4. Nosana job container running → CPU
-    5. All clear → GPU
+    2. nvidia-smi missing → CPU (belt-and-suspenders)
+    3. All clear → GPU
     """
-    # Step 1: forced CPU override
+    # Step 1: forced CPU override (set by host detection)
     if os.environ.get("FORCE_CPU"):
         eprint("[analyze] Mode: CPU (forced via FORCE_CPU env)")
         return "cpu"
 
-    # Step 2: check nvidia-smi exists and works
+    # Step 2: check nvidia-smi exists and works (belt-and-suspenders)
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
@@ -74,102 +76,9 @@ def get_inference_mode():
         eprint("[analyze] Mode: CPU (nvidia-smi timed out)")
         return "cpu"
 
-    # Step 3: VRAM check
-    vram_ok, vram_msg = _check_vram_available()
-    if not vram_ok:
-        eprint(f"[analyze] {vram_msg}")
-        eprint(f"[analyze] Mode: CPU (insufficient VRAM for {MODEL_NAME})")
-        return "cpu"
-    eprint(f"[analyze] {vram_msg}")
-
-    # Step 4: check for active Nosana job containers
-    try:
-        for outer in _detect_outer_containers():
-            result = subprocess.run(
-                ["docker", "exec", outer, "podman", "ps", "--format", "{{.Names}}"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode == 0:
-                containers = result.stdout.strip().split("\n")
-                for c in containers:
-                    c = c.strip()
-                    if c and c != "nosana-node" and not c.startswith("frpc-"):
-                        eprint(f"[analyze] Job container detected: {c}")
-                        eprint("[analyze] Mode: CPU (Nosana job running)")
-                        return "cpu"
-    except Exception:
-        pass
-
-    # Step 5: all clear
+    # Step 3: all clear
     eprint(f"[analyze] Mode: GPU ({gpu_name})")
     return "gpu"
-
-
-def _check_vram_available():
-    """Check if any GPU has enough free VRAM for the model.
-
-    Returns (bool, diagnostic_message) tuple.
-    """
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,memory.free,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return False, "VRAM check failed — nvidia-smi query error"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False, "VRAM check failed — nvidia-smi unavailable"
-
-    best_free = 0
-    best_idx = 0
-    gpu_details = []
-    for line in result.stdout.strip().split("\n"):
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 3:
-            continue
-        try:
-            idx = int(parts[0])
-            free = int(parts[1])
-            total = int(parts[2])
-        except ValueError:
-            continue
-        gpu_details.append(f"GPU {idx}: {free}/{total} MiB free")
-        if free > best_free:
-            best_free = free
-            best_idx = idx
-
-    detail_str = "[" + ", ".join(gpu_details) + "]" if gpu_details else "[no GPUs]"
-
-    if best_free >= VRAM_THRESHOLD_MIB:
-        return True, (
-            f"VRAM OK — GPU {best_idx} has {best_free} MiB free "
-            f"(need {VRAM_THRESHOLD_MIB} MiB) {detail_str}"
-        )
-    else:
-        return False, (
-            f"VRAM insufficient — best GPU {best_idx} has {best_free} MiB free "
-            f"(need {VRAM_THRESHOLD_MIB} MiB) {detail_str}"
-        )
-
-
-def _detect_outer_containers():
-    """Detect outer Docker containers running nosana/podman image."""
-    try:
-        result = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            containers = []
-            for line in result.stdout.strip().split("\n"):
-                parts = line.split("\t")
-                if len(parts) >= 2 and "nosana/podman" in parts[1]:
-                    containers.append(parts[0])
-            return containers
-    except Exception:
-        pass
-    return []
 
 
 def start_ollama(mode):
@@ -421,7 +330,7 @@ def run_llm_analysis(found_errors, unclassified, container_state, existing_keywo
     )
 
     eprint("[analyze] Querying LLM for error analysis...")
-    response = query_llm(prompt)
+    response = query_llm_with_spinner(prompt)
 
     if not response:
         eprint("[analyze] LLM returned empty response — using keyword-only results")
@@ -483,7 +392,7 @@ def run_keyword_discovery(unclassified, existing_keywords):
     )
 
     eprint("[analyze] Querying LLM for keyword discovery...")
-    response = query_llm(prompt)
+    response = query_llm_with_spinner(prompt)
 
     if not response:
         return []
@@ -591,6 +500,31 @@ def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 
+def _spinner(stop_event):
+    """Display a spinning indicator on stderr while waiting."""
+    chars = '|/-\\'
+    i = 0
+    while not stop_event.is_set():
+        sys.stderr.write(f'\r  {chars[i % len(chars)]}')
+        sys.stderr.flush()
+        stop_event.wait(0.3)
+        i += 1
+    sys.stderr.write('\r   \r')
+    sys.stderr.flush()
+
+
+def query_llm_with_spinner(prompt, system=SYSTEM_PROMPT):
+    """Wrap query_llm with a spinner for visual feedback."""
+    stop = threading.Event()
+    t = threading.Thread(target=_spinner, args=(stop,), daemon=True)
+    t.start()
+    try:
+        return query_llm(prompt, system)
+    finally:
+        stop.set()
+        t.join(timeout=2)
+
+
 def main():
     """Main analysis pipeline."""
     eprint(f"[LogLiefje AI v{VERSION}]")
@@ -624,8 +558,13 @@ def main():
     )
     eprint(f"[analyze] Keyword scan: {len(found_errors)} errors, {len(unclassified)} unclassified lines")
 
-    # 6. Determine inference mode and start LLM
+    # 6. Determine inference mode, select model, start LLM
     mode = get_inference_mode()
+    global MODEL_NAME
+    MODEL_NAME = MODEL_NAME_CPU if mode == "cpu" else MODEL_NAME_GPU
+    eprint(f"[analyze] Using model: {MODEL_NAME}")
+    if mode == "cpu":
+        eprint("[analyze] CPU mode (3b) — please wait...")
     ollama_proc = start_ollama(mode)
 
     try:

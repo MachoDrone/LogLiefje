@@ -2,7 +2,7 @@
 #--use: bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje-ai.sh)
 # --cache-buster: bash <(wget -qO- "https://raw.githubusercontent.com/MachoDrone/LogLiefje/main/LogLiefje-ai.sh?$(date +%s)")
 # LogLiefje AI — one-command log collection + AI error analysis + upload
-# v0.02.4
+# v0.02.5
 
 # ── Cleanup mode: remove cached image + model volume ─────────────────────
 if [[ "$1" == "--cleanup" ]]; then
@@ -85,9 +85,9 @@ AI_FILENAME="${SAFE_NAME}_${UTC_TS}_ai-report.txt"
 echo "Collecting logs via LogLiefje.sh..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [[ -f "${SCRIPT_DIR}/LogLiefje.sh" ]]; then
-    bash "${SCRIPT_DIR}/LogLiefje.sh" --no-upload
+    bash "${SCRIPT_DIR}/LogLiefje.sh" --no-upload 2>&1 | grep --line-buffered -iv "collection complete"
 else
-    bash <(wget -qO- "${GITHUB_RAW}/LogLiefje.sh") --no-upload
+    bash <(wget -qO- "${GITHUB_RAW}/LogLiefje.sh") --no-upload 2>&1 | grep --line-buffered -iv "collection complete"
 fi
 
 if [[ ! -f "mylog.txt" || ! -s "mylog.txt" ]]; then
@@ -137,33 +137,42 @@ else
         fi
     fi
 
-    # ── Detect active Nosana job (must happen on host, not inside container) ──
-    if [ "$FORCE_CPU" = false ]; then
+    # ── GPU/CPU detection (consolidated on host) ──────────────────────────
+    if [ "$FORCE_CPU" = true ]; then
+        echo "CPU mode forced via --cpu flag"
+    else
+        # Check 1: Nosana job status
         JOB_RUNNING=false
         mapfile -t _outers < <(docker ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | grep 'nosana/podman' | awk '{print $1}')
         if [ ${#_outers[@]} -gt 0 ]; then
             for _outer in "${_outers[@]}"; do
                 [ -z "$_outer" ] && continue
-                # Find nosana-node container and its logpath inside this podman container
                 _inner=$(docker exec "$_outer" podman ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | grep 'nosana/nosana-node' | awk '{print $1}')
                 if [ -z "$_inner" ]; then
-                    # No nosana-node container — not on a job
                     continue
                 fi
                 _logpath=$(docker exec "$_outer" podman inspect --format='{{.HostConfig.LogConfig.Path}}' "$_inner" 2>/dev/null)
                 if [ -z "$_logpath" ]; then
                     continue
                 fi
-                # Read last 10 lines directly (bypasses podman logs which hangs on large logs)
                 _tail=$(docker exec "$_outer" tail -n 10 "$_logpath" 2>/dev/null | tr -d '\033\000-\010\013\014\016-\037\177' | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
-                if ! echo "$_tail" | grep -q "QUEUED"; then
-                    echo "Nosana job detected on $_outer — forcing CPU mode"
+                _last_status=$(echo "$_tail" | grep -oE '(QUEUED|RUNNING|OPERATING|STAKED)' | tail -1)
+                if [ -n "$_last_status" ] && [ "$_last_status" != "QUEUED" ]; then
+                    echo "Nosana node on $_outer: ${_last_status} (not QUEUED) — forcing CPU mode"
                     FORCE_CPU=true
                     JOB_RUNNING=true
                     break
                 fi
             done
-            if [ "$JOB_RUNNING" = false ]; then
+        fi
+
+        # Check 2: VRAM check (only if job check didn't force CPU)
+        if [ "$FORCE_CPU" = false ]; then
+            FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1)
+            if [ -n "$FREE_VRAM" ] && [ "$FREE_VRAM" -lt 6200 ]; then
+                echo "VRAM insufficient (${FREE_VRAM} MiB free, need 6200) — forcing CPU mode"
+                FORCE_CPU=true
+            elif [ "$JOB_RUNNING" = false ]; then
                 echo "Nosana node(s) QUEUED — GPU available"
             fi
         fi
