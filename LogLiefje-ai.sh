@@ -24,7 +24,8 @@ if ! command -v jq &>/dev/null; then
 fi
 
 IMAGE_NAME="logliefje-ai:latest"
-GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main"
+GITHUB_BRANCH="${LOGLIEFJE_BRANCH:-main}"
+GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/${GITHUB_BRANCH}"
 EXPIRATION="72h"
 AI_REPORT=""
 REPORT_MARKER="===LOGLIEFJE_REPORT_START==="
