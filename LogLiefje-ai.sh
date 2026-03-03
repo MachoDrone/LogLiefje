@@ -2,7 +2,7 @@
 #--use: bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje-ai.sh)
 # --cache-buster: bash <(wget -qO- "https://raw.githubusercontent.com/MachoDrone/LogLiefje/main/LogLiefje-ai.sh?$(date +%s)")
 # LogLiefje AI — one-command log collection + AI error analysis + upload
-# v0.02.2
+# v0.02.3
 
 # ── Cleanup mode: remove cached image + model volume ─────────────────────
 if [[ "$1" == "--cleanup" ]]; then
@@ -34,10 +34,12 @@ REPORT_END_MARKER="===LOGLIEFJE_REPORT_END==="
 # ------------- ARGUMENT PARSING -------------
 TEST_MODE=false
 FORCE_CPU=false
+NO_UPLOAD=false
 for arg in "$@"; do
   case "$arg" in
-    --test) TEST_MODE=true ;;
-    --cpu)  FORCE_CPU=true ;;
+    --test)      TEST_MODE=true ;;
+    --cpu)       FORCE_CPU=true ;;
+    --no-upload) NO_UPLOAD=true ;;
   esac
 done
 
@@ -196,6 +198,9 @@ fi
 # ================================================
 # === STEP 3: UPLOAD ==============================
 # ================================================
+if [ "$NO_UPLOAD" = true ]; then
+    echo "Skipping upload (--no-upload mode)"
+else
 TEXT_FILE="mylog.txt"
 
 # ------------- mañana attitude (do not change) -------------
@@ -364,6 +369,7 @@ elif [[ -n "$UPLOAD_URL" || "$SLACK_OK" == "true" ]]; then
 else
     echo "All uploads FAILED:"
     echo -e "$ERRORS"
+fi
 fi
 
 echo "Done!"
