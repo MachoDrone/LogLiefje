@@ -13,14 +13,16 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.88" >> mylog.txt   # ← incremented
+echo "log collector v0.00.89" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- ARGUMENT PARSING -------------
 TEST_MODE=false
+NO_UPLOAD=false
 for arg in "$@"; do
   case "$arg" in
     --test) TEST_MODE=true ;;
+    --no-upload) NO_UPLOAD=true ;;
   esac
 done
 
@@ -35,43 +37,45 @@ USER_ID="U08NWH5GG8O"
 EXPIRATION="72h"
 CONFIG_FILE="$HOME/.logliefje_name"
 
-# ------------- DISCORD NAME PROMPT (early, before collection) -------------
-SAVED_NAME=""
-if [[ -f "$CONFIG_FILE" ]]; then
-    SAVED_NAME=$(<"$CONFIG_FILE")
-fi
+# ------------- DISCORD NAME + OPERATOR ERROR PROMPTS (skip in --no-upload) --
+if [ "$NO_UPLOAD" = false ]; then
+  SAVED_NAME=""
+  if [[ -f "$CONFIG_FILE" ]]; then
+      SAVED_NAME=$(<"$CONFIG_FILE")
+  fi
 
-if [[ -n "$SAVED_NAME" ]]; then
-    printf "\033[1;34mEnter Discord Name for support reference [%s]: \033[0m" "$SAVED_NAME"
-else
-    printf "\033[1;34mEnter Discord Name for support reference: \033[0m"
-fi
-read -r DISCORD_NAME
+  if [[ -n "$SAVED_NAME" ]]; then
+      printf "\033[1;34mEnter Discord Name for support reference [%s]: \033[0m" "$SAVED_NAME"
+  else
+      printf "\033[1;34mEnter Discord Name for support reference: \033[0m"
+  fi
+  read -r DISCORD_NAME
 
-if [[ -z "$DISCORD_NAME" && -n "$SAVED_NAME" ]]; then
-    DISCORD_NAME="$SAVED_NAME"
-elif [[ -z "$DISCORD_NAME" ]]; then
-    echo "Error: Discord name is required!"
-    exit 1
-fi
+  if [[ -z "$DISCORD_NAME" && -n "$SAVED_NAME" ]]; then
+      DISCORD_NAME="$SAVED_NAME"
+  elif [[ -z "$DISCORD_NAME" ]]; then
+      echo "Error: Discord name is required!"
+      exit 1
+  fi
 
-# Save for future use
-echo "$DISCORD_NAME" > "$CONFIG_FILE"
+  # Save for future use
+  echo "$DISCORD_NAME" > "$CONFIG_FILE"
 
-# Sanitize name for filename
-SAFE_NAME=$(echo "$DISCORD_NAME" | tr -cd 'a-zA-Z0-9._-')
-UTC_TS=$(date -u +%Y%m%d_%H%M%SZ)
-SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
+  # Sanitize name for filename
+  SAFE_NAME=$(echo "$DISCORD_NAME" | tr -cd 'a-zA-Z0-9._-')
+  UTC_TS=$(date -u +%Y%m%d_%H%M%SZ)
+  SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
 
-echo ""
-printf "\033[1;33mPaste the error you saw, or describe the issue.\033[0m\n"
-printf "\033[1;33mPress Enter twice when done:\033[0m\n"
-OPERATOR_ERROR=""
-while IFS= read -r _line; do
-  [[ -z "$_line" ]] && break
-  OPERATOR_ERROR="${OPERATOR_ERROR:+${OPERATOR_ERROR}
+  echo ""
+  printf "\033[1;33mPaste the error you saw, or describe the issue.\033[0m\n"
+  printf "\033[1;33mPress Enter twice when done:\033[0m\n"
+  OPERATOR_ERROR=""
+  while IFS= read -r _line; do
+    [[ -z "$_line" ]] && break
+    OPERATOR_ERROR="${OPERATOR_ERROR:+${OPERATOR_ERROR}
 }${_line}"
-done
+  done
+fi
 
 echo "Collecting logs..."
 
@@ -823,6 +827,22 @@ if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
   echo "  log collection complete"
 fi
 #--- END NOSANA NODE LOG TAILS ---
+
+# ── Sanitize: strip control bytes + non-ASCII → pure 7-bit ASCII ─────────
+# (done before --no-upload exit so callers get a clean file too)
+perl -CSDA -pi -e '
+  s/\x{2714}/[OK]/g;       # ✔
+  s/\x{2716}/[FAIL]/g;     # ✖
+  s/\x{2026}/.../g;        # …
+  s/\x{00B0}/deg/g;        # °
+  s/[^\x09\x0A\x0D\x20-\x7E]//g;  # strip anything else non-ASCII
+' mylog.txt
+
+# ── --no-upload: stop here, caller handles upload ────────────────────────
+if [ "$NO_UPLOAD" = true ]; then
+    echo "Log collection complete (--no-upload mode)."
+    exit 0
+fi
 
 # ================================================
 # === UPLOAD AND DISPLAY =========================
