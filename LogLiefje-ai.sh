@@ -2,7 +2,7 @@
 #--use: bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje-ai.sh)
 # --cache-buster: bash <(wget -qO- "https://raw.githubusercontent.com/MachoDrone/LogLiefje/main/LogLiefje-ai.sh?$(date +%s)")
 # LogLiefje AI — one-command log collection + AI error analysis + upload
-# v0.02.1
+# v0.02.2
 
 # ── Cleanup mode: remove cached image + model volume ─────────────────────
 if [[ "$1" == "--cleanup" ]]; then
@@ -144,7 +144,7 @@ else
             FORCE_CPU_ENV="-e FORCE_CPU=1"
         elif nvidia-smi &>/dev/null 2>&1; then
             GPU_FLAG="--gpus all"
-            echo "Running AI analysis (GPU mode)..."
+            echo "Running AI analysis (GPU detected — VRAM check inside container)..."
         else
             echo "Running AI analysis (CPU mode)..."
         fi

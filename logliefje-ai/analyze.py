@@ -21,7 +21,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.02.1"
+VERSION = "0.02.2"
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "error-report.txt")
@@ -32,6 +32,7 @@ MODEL_NAME = "qwen2.5:7b"
 MAX_LOG_LINES_TO_LLM = 500
 MAX_UNCLASSIFIED_LINES = 200
 KEYWORD_CONFIDENCE_THRESHOLD = 0.7
+VRAM_THRESHOLD_MIB = 6200
 
 
 def get_node_id():
@@ -43,30 +44,46 @@ def get_node_id():
 
 
 def get_inference_mode():
-    """Check if GPU is available and not running a Nosana job.
+    """Determine GPU vs CPU inference with 5-step priority.
 
-    Checks for nvidia-smi first. Then checks if a Nosana job container
-    is currently using the GPU (any inner podman container that's not
-    nosana-node and not frpc-*).
+    1. FORCE_CPU env var → CPU
+    2. nvidia-smi missing → CPU
+    3. VRAM < VRAM_THRESHOLD_MIB free → CPU
+    4. Nosana job container running → CPU
+    5. All clear → GPU
     """
-    # Check for forced CPU mode (--cpu flag)
+    # Step 1: forced CPU override
     if os.environ.get("FORCE_CPU"):
+        eprint("[analyze] Mode: CPU (forced via FORCE_CPU env)")
         return "cpu"
 
-    # Check if GPU is available at all
+    # Step 2: check nvidia-smi exists and works
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
+            eprint("[analyze] Mode: CPU (nvidia-smi returned non-zero)")
             return "cpu"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        gpu_name = result.stdout.strip().split("\n")[0].strip()
+    except FileNotFoundError:
+        eprint("[analyze] Mode: CPU (nvidia-smi not found)")
+        return "cpu"
+    except subprocess.TimeoutExpired:
+        eprint("[analyze] Mode: CPU (nvidia-smi timed out)")
         return "cpu"
 
-    # Check for active Nosana job containers using the GPU
+    # Step 3: VRAM check
+    vram_ok, vram_msg = _check_vram_available()
+    if not vram_ok:
+        eprint(f"[analyze] {vram_msg}")
+        eprint(f"[analyze] Mode: CPU (insufficient VRAM for {MODEL_NAME})")
+        return "cpu"
+    eprint(f"[analyze] {vram_msg}")
+
+    # Step 4: check for active Nosana job containers
     try:
-        # Try each possible outer container name
         for outer in _detect_outer_containers():
             result = subprocess.run(
                 ["docker", "exec", outer, "podman", "ps", "--format", "{{.Names}}"],
@@ -77,12 +94,63 @@ def get_inference_mode():
                 for c in containers:
                     c = c.strip()
                     if c and c != "nosana-node" and not c.startswith("frpc-"):
-                        print(f"[analyze] Job container detected: {c} — using CPU mode", file=sys.stderr)
+                        eprint(f"[analyze] Job container detected: {c}")
+                        eprint("[analyze] Mode: CPU (Nosana job running)")
                         return "cpu"
     except Exception:
         pass
 
+    # Step 5: all clear
+    eprint(f"[analyze] Mode: GPU ({gpu_name})")
     return "gpu"
+
+
+def _check_vram_available():
+    """Check if any GPU has enough free VRAM for the model.
+
+    Returns (bool, diagnostic_message) tuple.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,memory.free,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return False, "VRAM check failed — nvidia-smi query error"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False, "VRAM check failed — nvidia-smi unavailable"
+
+    best_free = 0
+    best_idx = 0
+    gpu_details = []
+    for line in result.stdout.strip().split("\n"):
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 3:
+            continue
+        try:
+            idx = int(parts[0])
+            free = int(parts[1])
+            total = int(parts[2])
+        except ValueError:
+            continue
+        gpu_details.append(f"GPU {idx}: {free}/{total} MiB free")
+        if free > best_free:
+            best_free = free
+            best_idx = idx
+
+    detail_str = "[" + ", ".join(gpu_details) + "]" if gpu_details else "[no GPUs]"
+
+    if best_free >= VRAM_THRESHOLD_MIB:
+        return True, (
+            f"VRAM OK — GPU {best_idx} has {best_free} MiB free "
+            f"(need {VRAM_THRESHOLD_MIB} MiB) {detail_str}"
+        )
+    else:
+        return False, (
+            f"VRAM insufficient — best GPU {best_idx} has {best_free} MiB free "
+            f"(need {VRAM_THRESHOLD_MIB} MiB) {detail_str}"
+        )
 
 
 def _detect_outer_containers():
