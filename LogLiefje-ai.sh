@@ -24,7 +24,7 @@ if ! command -v jq &>/dev/null; then
 fi
 
 IMAGE_NAME="logliefje-ai:latest"
-AI_VERSION="0.02.9"
+AI_VERSION="0.03.0"
 GITHUB_BRANCH="${LOGLIEFJE_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/${GITHUB_BRANCH}"
 EXPIRATION="72h"
@@ -37,12 +37,14 @@ TEST_MODE=false
 FORCE_CPU=false
 FORCE_GPU=false
 NO_UPLOAD=false
+FULL_LOGS=false
 for arg in "$@"; do
   case "$arg" in
     --test)      TEST_MODE=true ;;
     --cpu)       FORCE_CPU=true ;;
     --gpu)       FORCE_GPU=true ;;
     --no-upload) NO_UPLOAD=true ;;
+    --100)       FULL_LOGS=true ;;
   esac
 done
 
@@ -87,10 +89,12 @@ AI_FILENAME="${SAFE_NAME}-AI-${UTC_TS}.txt"
 # ================================================
 echo "Collecting logs via LogLiefje.sh..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+_LL_ARGS="--no-upload"
+[ "$FULL_LOGS" = true ] && _LL_ARGS="$_LL_ARGS --100"
 if [[ -f "${SCRIPT_DIR}/LogLiefje.sh" ]]; then
-    bash "${SCRIPT_DIR}/LogLiefje.sh" --no-upload 2>&1 | grep --line-buffered -iv "collection complete"
+    bash "${SCRIPT_DIR}/LogLiefje.sh" $_LL_ARGS 2>&1 | grep --line-buffered -iv "collection complete"
 else
-    bash <(wget -qO- "${GITHUB_RAW}/LogLiefje.sh") --no-upload 2>&1 | grep --line-buffered -iv "collection complete"
+    bash <(wget -qO- "${GITHUB_RAW}/LogLiefje.sh") $_LL_ARGS 2>&1 | grep --line-buffered -iv "collection complete"
 fi
 
 if [[ ! -f "mylog.txt" || ! -s "mylog.txt" ]]; then
