@@ -24,7 +24,7 @@ if ! command -v jq &>/dev/null; then
 fi
 
 IMAGE_NAME="logliefje-ai:latest"
-AI_VERSION="0.02.8"
+AI_VERSION="0.02.9"
 GITHUB_BRANCH="${LOGLIEFJE_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/${GITHUB_BRANCH}"
 EXPIRATION="72h"
@@ -79,8 +79,8 @@ echo "$DISCORD_NAME" > "$CONFIG_FILE"
 
 SAFE_NAME=$(echo "$DISCORD_NAME" | tr -cd 'a-zA-Z0-9._-')
 UTC_TS=$(date -u +%Y%m%d_%H%M%SZ)
-SLACK_FILENAME="${SAFE_NAME}_${UTC_TS}.txt"
-AI_FILENAME="${SAFE_NAME}_${UTC_TS}_ai-report.txt"
+SLACK_FILENAME="${SAFE_NAME}-RAW-${UTC_TS}.txt"
+AI_FILENAME="${SAFE_NAME}-AI-${UTC_TS}.txt"
 
 # ================================================
 # === STEP 1: COLLECT LOGS (via LogLiefje.sh) =====
