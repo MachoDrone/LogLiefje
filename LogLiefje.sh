@@ -13,16 +13,18 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.89" >> mylog.txt   # ← incremented
+echo "log collector v0.00.90" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- ARGUMENT PARSING -------------
 TEST_MODE=false
 NO_UPLOAD=false
+FULL_LOGS=false
 for arg in "$@"; do
   case "$arg" in
-    --test) TEST_MODE=true ;;
+    --test)      TEST_MODE=true ;;
     --no-upload) NO_UPLOAD=true ;;
+    --100)       FULL_LOGS=true ;;
   esac
 done
 
@@ -728,6 +730,33 @@ if [ "$NUM_LOG_CONTAINERS" -gt 0 ]; then
     printf "  scanning %s (%d/%d)...\r" "$_label" "$_pass" "$NUM_LOG_CONTAINERS"
     _tmplog=$(mktemp)
     docker exec "$_outer" cat "$_logpath" 2>/dev/null | _clean_docker_log | _dedup_consecutive > "$_tmplog"
+    # ── 48-hour filter (default): keep first 29 lines + last 48h ──────────
+    if [ "$FULL_LOGS" = false ]; then
+        _cutoff=$(date -u -d '48 hours ago' +%Y-%m-%dT%H:%M:%S)
+        _total=$(wc -l < "$_tmplog")
+        if [ "$_total" -gt 29 ]; then
+            _head_tmp=$(mktemp)
+            head -n 29 "$_tmplog" > "$_head_tmp"
+            _tail_tmp=$(mktemp)
+            tail -n +30 "$_tmplog" | awk -v cutoff="$_cutoff" '
+                /^[0-9]{4}-[0-9]{2}-[0-9]{2}T/ {
+                    ts = substr($0, 1, 19)
+                    if (ts >= cutoff) { printing=1 }
+                }
+                printing { print }
+            ' > "$_tail_tmp"
+            if [ -s "$_tail_tmp" ]; then
+                _filtered_lines=$(wc -l < "$_tail_tmp")
+                _skipped=$((_total - 29 - _filtered_lines))
+                {
+                    cat "$_head_tmp"
+                    printf "\n--- last 48 hours listed below (%d older lines omitted) ---\n\n" "$_skipped"
+                    cat "$_tail_tmp"
+                } > "$_tmplog"
+            fi
+            rm -f "$_head_tmp" "$_tail_tmp"
+        fi
+    fi
     LOG_TMPFILES[$_pair]="$_tmplog"
     LOG_TOTAL_LINES[$_pair]=$(wc -l < "$_tmplog")
     _total_all=$((_total_all + LOG_TOTAL_LINES[$_pair]))
