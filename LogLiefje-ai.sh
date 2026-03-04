@@ -24,7 +24,7 @@ if ! command -v jq &>/dev/null; then
 fi
 
 IMAGE_NAME="logliefje-ai:latest"
-AI_VERSION="0.02.6"
+AI_VERSION="0.02.7"
 GITHUB_BRANCH="${LOGLIEFJE_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/${GITHUB_BRANCH}"
 EXPIRATION="72h"
@@ -204,7 +204,7 @@ else
         fi
 
         # Capture stdout only (has report markers); stderr goes to terminal
-        DOCKER_STDOUT=$(timeout 600 docker run --rm $GPU_FLAG $FORCE_CPU_ENV \
+        DOCKER_STDOUT=$(docker run --rm $GPU_FLAG $FORCE_CPU_ENV \
             -v "$(pwd)/mylog.txt:/input/mylogs.txt:ro" \
             -v logliefje-model-cache:/root/.ollama \
             ${GITHUB_TOKEN:+-e GITHUB_TOKEN="$GITHUB_TOKEN"} \

@@ -10,6 +10,7 @@ Version: 0.02.3
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -22,7 +23,8 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.02.3"
+VERSION = "0.02.7"
+LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "error-report.txt")
@@ -567,7 +569,15 @@ def main():
         eprint("[analyze] CPU mode (3b) — please wait...")
     ollama_proc = start_ollama(mode)
 
+    def _llm_timeout_handler(signum, frame):
+        raise TimeoutError("LLM inference exceeded time limit")
+
     try:
+        # Start LLM timeout (covers only inference, not model download/startup)
+        signal.signal(signal.SIGALRM, _llm_timeout_handler)
+        signal.alarm(LLM_TIMEOUT)
+        eprint(f"[analyze] LLM timeout: {LLM_TIMEOUT}s starts now")
+
         # 7. LLM analysis
         existing_kws = keywords_data.get("keywords", [])
         interpretations, novel_kws_1, healthy_signals, summary = run_llm_analysis(
@@ -576,6 +586,8 @@ def main():
 
         # 8. Keyword discovery pass
         novel_kws_2 = run_keyword_discovery(unclassified, existing_kws)
+
+        signal.alarm(0)  # Cancel timeout — LLM work finished
 
         # Merge novel keywords from both passes
         seen = set()
@@ -587,6 +599,13 @@ def main():
                 all_novel.append(kw)
 
         eprint(f"[analyze] LLM analysis complete: {len(interpretations)} interpretations, {len(all_novel)} novel keywords")
+
+    except TimeoutError:
+        signal.alarm(0)
+        eprint(f"[analyze] LLM timed out after {LLM_TIMEOUT}s — using keyword-only results")
+        interpretations, novel_kws_1, healthy_signals = [], [], []
+        summary = "LLM timed out — keyword scan only"
+        all_novel = []
 
     finally:
         # Stop ollama
