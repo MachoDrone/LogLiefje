@@ -24,7 +24,7 @@ if ! command -v jq &>/dev/null; then
 fi
 
 IMAGE_NAME="logliefje-ai:latest"
-AI_VERSION="0.02.7"
+AI_VERSION="0.02.8"
 GITHUB_BRANCH="${LOGLIEFJE_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/${GITHUB_BRANCH}"
 EXPIRATION="72h"
@@ -35,11 +35,13 @@ REPORT_END_MARKER="===LOGLIEFJE_REPORT_END==="
 # ------------- ARGUMENT PARSING -------------
 TEST_MODE=false
 FORCE_CPU=false
+FORCE_GPU=false
 NO_UPLOAD=false
 for arg in "$@"; do
   case "$arg" in
     --test)      TEST_MODE=true ;;
     --cpu)       FORCE_CPU=true ;;
+    --gpu)       FORCE_GPU=true ;;
     --no-upload) NO_UPLOAD=true ;;
   esac
 done
@@ -149,7 +151,9 @@ else
     fi
 
     # ── GPU/CPU detection (consolidated on host) ──────────────────────────
-    if [ "$FORCE_CPU" = true ]; then
+    if [ "$FORCE_GPU" = true ]; then
+        echo "GPU mode forced via --gpu flag"
+    elif [ "$FORCE_CPU" = true ]; then
         echo "CPU mode forced via --cpu flag"
     else
         # Check 1: Nosana job status
@@ -193,7 +197,10 @@ else
     if docker image inspect "$IMAGE_NAME" &>/dev/null; then
         GPU_FLAG=""
         FORCE_CPU_ENV=""
-        if [ "$FORCE_CPU" = true ]; then
+        if [ "$FORCE_GPU" = true ]; then
+            GPU_FLAG="--gpus all"
+            echo "Running AI analysis (GPU mode — forced)..."
+        elif [ "$FORCE_CPU" = true ]; then
             echo "Running AI analysis (CPU mode — forced)..."
             FORCE_CPU_ENV="-e FORCE_CPU=1"
         elif nvidia-smi &>/dev/null 2>&1; then

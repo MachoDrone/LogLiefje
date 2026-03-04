@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.02.7"
+VERSION = "0.02.8"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
