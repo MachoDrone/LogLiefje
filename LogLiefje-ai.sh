@@ -2,7 +2,7 @@
 #--use: bash <(wget -qO- https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/main/LogLiefje-ai.sh)
 # --cache-buster: bash <(wget -qO- "https://raw.githubusercontent.com/MachoDrone/LogLiefje/main/LogLiefje-ai.sh?$(date +%s)")
 # LogLiefje AI — one-command log collection + AI error analysis + upload
-# v0.02.2
+# v0.02.6
 
 # ── Cleanup mode: remove cached image + model volume ─────────────────────
 if [[ "$1" == "--cleanup" ]]; then
@@ -24,6 +24,7 @@ if ! command -v jq &>/dev/null; then
 fi
 
 IMAGE_NAME="logliefje-ai:latest"
+AI_VERSION="0.02.8"
 GITHUB_BRANCH="${LOGLIEFJE_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/${GITHUB_BRANCH}"
 EXPIRATION="72h"
@@ -34,10 +35,14 @@ REPORT_END_MARKER="===LOGLIEFJE_REPORT_END==="
 # ------------- ARGUMENT PARSING -------------
 TEST_MODE=false
 FORCE_CPU=false
+FORCE_GPU=false
+NO_UPLOAD=false
 for arg in "$@"; do
   case "$arg" in
-    --test) TEST_MODE=true ;;
-    --cpu)  FORCE_CPU=true ;;
+    --test)      TEST_MODE=true ;;
+    --cpu)       FORCE_CPU=true ;;
+    --gpu)       FORCE_GPU=true ;;
+    --no-upload) NO_UPLOAD=true ;;
   esac
 done
 
@@ -83,9 +88,9 @@ AI_FILENAME="${SAFE_NAME}_${UTC_TS}_ai-report.txt"
 echo "Collecting logs via LogLiefje.sh..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [[ -f "${SCRIPT_DIR}/LogLiefje.sh" ]]; then
-    bash "${SCRIPT_DIR}/LogLiefje.sh" --no-upload
+    bash "${SCRIPT_DIR}/LogLiefje.sh" --no-upload 2>&1 | grep --line-buffered -iv "collection complete"
 else
-    bash <(wget -qO- "${GITHUB_RAW}/LogLiefje.sh") --no-upload
+    bash <(wget -qO- "${GITHUB_RAW}/LogLiefje.sh") --no-upload 2>&1 | grep --line-buffered -iv "collection complete"
 fi
 
 if [[ ! -f "mylog.txt" || ! -s "mylog.txt" ]]; then
@@ -100,10 +105,20 @@ echo "Log collection complete."
 if ! command -v docker &>/dev/null; then
     echo "Docker not available — skipping AI analysis."
 else
-    # ── Build image if it doesn't exist ──────────────────────────────────
-    if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+    # ── Build image if missing or outdated ──────────────────────────────
+    NEEDS_BUILD=false
+    BUILT_VERSION=$(docker inspect --format '{{index .Config.Labels "logliefje.version"}}' "$IMAGE_NAME" 2>/dev/null)
+    if [ "$BUILT_VERSION" = "$AI_VERSION" ]; then
+        : # image is current
+    elif [ -z "$BUILT_VERSION" ] || [ "$BUILT_VERSION" = "<no value>" ]; then
         echo "First run — building AI image (~500MB, no model baked in)..."
+        NEEDS_BUILD=true
+    else
+        echo "AI image outdated (v${BUILT_VERSION} → v${AI_VERSION}) — rebuilding..."
+        NEEDS_BUILD=true
+    fi
 
+    if [ "$NEEDS_BUILD" = true ]; then
         # Use local logliefje-ai/ directory if available, otherwise download
         if [[ -d "${SCRIPT_DIR}/logliefje-ai" && -f "${SCRIPT_DIR}/logliefje-ai/Dockerfile" ]]; then
             echo "  Using local logliefje-ai/ directory..."
@@ -135,22 +150,68 @@ else
         fi
     fi
 
+    # ── GPU/CPU detection (consolidated on host) ──────────────────────────
+    if [ "$FORCE_GPU" = true ]; then
+        echo "GPU mode forced via --gpu flag"
+    elif [ "$FORCE_CPU" = true ]; then
+        echo "CPU mode forced via --cpu flag"
+    else
+        # Check 1: Nosana job status
+        JOB_RUNNING=false
+        mapfile -t _outers < <(docker ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | grep 'nosana/podman' | awk '{print $1}')
+        if [ ${#_outers[@]} -gt 0 ]; then
+            for _outer in "${_outers[@]}"; do
+                [ -z "$_outer" ] && continue
+                _inner=$(docker exec "$_outer" podman ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | grep 'nosana/nosana-node' | awk '{print $1}')
+                if [ -z "$_inner" ]; then
+                    continue
+                fi
+                _logpath=$(docker exec "$_outer" podman inspect --format='{{.HostConfig.LogConfig.Path}}' "$_inner" 2>/dev/null)
+                if [ -z "$_logpath" ]; then
+                    continue
+                fi
+                _tail=$(docker exec "$_outer" tail -n 10 "$_logpath" 2>/dev/null | tr -d '\033\000-\010\013\014\016-\037\177' | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+                _last_status=$(echo "$_tail" | grep -oE '(QUEUED|RUNNING|OPERATING|STAKED)' | tail -1)
+                if [ -n "$_last_status" ] && [ "$_last_status" != "QUEUED" ]; then
+                    echo "Nosana node on $_outer: ${_last_status} (not QUEUED) — forcing CPU mode"
+                    FORCE_CPU=true
+                    JOB_RUNNING=true
+                    break
+                fi
+            done
+        fi
+
+        # Check 2: VRAM check (only if job check didn't force CPU)
+        if [ "$FORCE_CPU" = false ]; then
+            FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1)
+            if [ -n "$FREE_VRAM" ] && [ "$FREE_VRAM" -lt 6200 ]; then
+                echo "VRAM insufficient (${FREE_VRAM} MiB free, need 6200) — forcing CPU mode"
+                FORCE_CPU=true
+            elif [ "$JOB_RUNNING" = false ]; then
+                echo "Nosana node(s) QUEUED — GPU available"
+            fi
+        fi
+    fi
+
     # ── Run AI container (stdout = report, stderr = diagnostics) ─────────
     if docker image inspect "$IMAGE_NAME" &>/dev/null; then
         GPU_FLAG=""
         FORCE_CPU_ENV=""
-        if [ "$FORCE_CPU" = true ]; then
-            echo "Running AI analysis (CPU mode — forced via --cpu)..."
+        if [ "$FORCE_GPU" = true ]; then
+            GPU_FLAG="--gpus all"
+            echo "Running AI analysis (GPU mode — forced)..."
+        elif [ "$FORCE_CPU" = true ]; then
+            echo "Running AI analysis (CPU mode — forced)..."
             FORCE_CPU_ENV="-e FORCE_CPU=1"
         elif nvidia-smi &>/dev/null 2>&1; then
             GPU_FLAG="--gpus all"
-            echo "Running AI analysis (GPU detected — VRAM check inside container)..."
+            echo "Running AI analysis (GPU mode)..."
         else
             echo "Running AI analysis (CPU mode)..."
         fi
 
         # Capture stdout only (has report markers); stderr goes to terminal
-        DOCKER_STDOUT=$(timeout 600 docker run --rm $GPU_FLAG $FORCE_CPU_ENV \
+        DOCKER_STDOUT=$(docker run --rm $GPU_FLAG $FORCE_CPU_ENV \
             -v "$(pwd)/mylog.txt:/input/mylogs.txt:ro" \
             -v logliefje-model-cache:/root/.ollama \
             ${GITHUB_TOKEN:+-e GITHUB_TOKEN="$GITHUB_TOKEN"} \
@@ -196,6 +257,9 @@ fi
 # ================================================
 # === STEP 3: UPLOAD ==============================
 # ================================================
+if [ "$NO_UPLOAD" = true ]; then
+    echo "Skipping upload (--no-upload mode)"
+else
 TEXT_FILE="mylog.txt"
 
 # ------------- mañana attitude (do not change) -------------
@@ -364,6 +428,7 @@ elif [[ -n "$UPLOAD_URL" || "$SLACK_OK" == "true" ]]; then
 else
     echo "All uploads FAILED:"
     echo -e "$ERRORS"
+fi
 fi
 
 echo "Done!"
