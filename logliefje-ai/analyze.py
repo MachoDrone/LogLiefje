@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.03.5
+Version: 0.03.6
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.03.5"
+VERSION = "0.03.6"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -635,48 +635,52 @@ def main():
     coverage_pct = (lines_sent / total_unclassified * 100) if total_unclassified > 0 else 100.0
     eprint(f"[analyze] Coverage: {lines_sent}/{total_unclassified} unclassified lines sent to LLM ({coverage_pct:.0f}%)")
 
+    # CPU mode: keyword-scan-only (LLM too slow on CPU-only nodes)
     if mode == "cpu":
-        eprint(f"[analyze] CPU-lite: max_unclassified={effective_max_unclassified}, "
-               f"num_predict={effective_num_predict}, timeout={effective_timeout}s, "
-               f"keyword_discovery=skipped")
-    ollama_proc = start_ollama(mode)
+        eprint("[analyze] CPU mode — keyword-scan-only (LLM skipped)")
+        pass1_status = "skipped"
+        pass2_status = "skipped"
+        interpretations, healthy_signals = [], []
+        summary = "CPU mode — keyword scan only"
+        all_novel = []
+    else:
+        ollama_proc = start_ollama(mode)
 
-    def _llm_timeout_handler(signum, frame):
-        raise TimeoutError("LLM inference exceeded time limit")
+        def _llm_timeout_handler(signum, frame):
+            raise TimeoutError("LLM inference exceeded time limit")
 
-    # Pass status tracking
-    pass1_status = "pending"
-    pass2_status = "skipped" if mode == "cpu" else "pending"
-    pass1_elapsed = 0.0
-    pass2_elapsed = 0.0
+        # Pass status tracking
+        pass1_status = "pending"
+        pass2_status = "pending"
+        pass1_elapsed = 0.0
+        pass2_elapsed = 0.0
 
-    try:
-        # Start LLM timeout (covers only inference, not model download/startup)
-        signal.signal(signal.SIGALRM, _llm_timeout_handler)
-        signal.alarm(effective_timeout)
-        eprint(f"[analyze] LLM timeout: {effective_timeout}s starts now")
+        try:
+            # Start LLM timeout (covers only inference, not model download/startup)
+            signal.signal(signal.SIGALRM, _llm_timeout_handler)
+            signal.alarm(effective_timeout)
+            eprint(f"[analyze] LLM timeout: {effective_timeout}s starts now")
 
-        # 7. LLM analysis (pass 1)
-        existing_kws = keywords_data.get("keywords", [])
-        pass1_start = time.time()
-        interpretations, novel_kws_1, healthy_signals, summary = run_llm_analysis(
-            found_errors, unclassified, container_state, existing_kws,
-            max_unclassified=effective_max_unclassified,
-            max_tokens=effective_num_predict,
-        )
-        pass1_elapsed = time.time() - pass1_start
-        # Check if the LLM call itself failed (curl error, timeout, etc.)
-        pass1_failed = any(s.get("label") == "error_analysis" and "error" in s for s in LLM_CALL_STATS)
-        if pass1_failed:
-            pass1_status = "failed"
-        elif interpretations:
-            pass1_status = "ok"
-        else:
-            pass1_status = "empty"
-        eprint(f"[analyze] Pass 1 (error analysis): {pass1_elapsed:.1f}s [{pass1_status}]")
+            # 7. LLM analysis (pass 1)
+            existing_kws = keywords_data.get("keywords", [])
+            pass1_start = time.time()
+            interpretations, novel_kws_1, healthy_signals, summary = run_llm_analysis(
+                found_errors, unclassified, container_state, existing_kws,
+                max_unclassified=effective_max_unclassified,
+                max_tokens=effective_num_predict,
+            )
+            pass1_elapsed = time.time() - pass1_start
+            # Check if the LLM call itself failed (curl error, timeout, etc.)
+            pass1_failed = any(s.get("label") == "error_analysis" and "error" in s for s in LLM_CALL_STATS)
+            if pass1_failed:
+                pass1_status = "failed"
+            elif interpretations:
+                pass1_status = "ok"
+            else:
+                pass1_status = "empty"
+            eprint(f"[analyze] Pass 1 (error analysis): {pass1_elapsed:.1f}s [{pass1_status}]")
 
-        # 8. Keyword discovery pass (skipped in CPU mode to save time)
-        if mode == "gpu":
+            # 8. Keyword discovery pass
             pass2_start = time.time()
             novel_kws_2 = run_keyword_discovery(unclassified, existing_kws)
             pass2_elapsed = time.time() - pass2_start
@@ -688,43 +692,40 @@ def main():
             else:
                 pass2_status = "empty"
             eprint(f"[analyze] Pass 2 (keyword discovery): {pass2_elapsed:.1f}s [{pass2_status}]")
-        else:
-            eprint("[analyze] CPU mode — skipping keyword discovery pass")
-            novel_kws_2 = []
 
-        signal.alarm(0)  # Cancel timeout — LLM work finished
+            signal.alarm(0)  # Cancel timeout — LLM work finished
 
-        # Merge novel keywords from both passes
-        seen = set()
-        all_novel = []
-        for kw in novel_kws_1 + novel_kws_2:
-            pat = kw.get("pattern", "").lower()
-            if pat not in seen:
-                seen.add(pat)
-                all_novel.append(kw)
+            # Merge novel keywords from both passes
+            seen = set()
+            all_novel = []
+            for kw in novel_kws_1 + novel_kws_2:
+                pat = kw.get("pattern", "").lower()
+                if pat not in seen:
+                    seen.add(pat)
+                    all_novel.append(kw)
 
-        eprint(f"[analyze] LLM analysis complete: {len(interpretations)} interpretations, {len(all_novel)} novel keywords")
+            eprint(f"[analyze] LLM analysis complete: {len(interpretations)} interpretations, {len(all_novel)} novel keywords")
 
-    except TimeoutError:
-        signal.alarm(0)
-        eprint(f"[analyze] LLM timed out after {effective_timeout}s — using keyword-only results")
-        # Mark whichever pass was running as timeout
-        if pass1_status == "pending":
-            pass1_status = "timeout"
-        elif pass2_status == "pending":
-            pass2_status = "timeout"
-        interpretations, novel_kws_1, healthy_signals = [], [], []
-        summary = "LLM timed out — keyword scan only"
-        all_novel = []
+        except TimeoutError:
+            signal.alarm(0)
+            eprint(f"[analyze] LLM timed out after {effective_timeout}s — using keyword-only results")
+            # Mark whichever pass was running as timeout
+            if pass1_status == "pending":
+                pass1_status = "timeout"
+            elif pass2_status == "pending":
+                pass2_status = "timeout"
+            interpretations, novel_kws_1, healthy_signals = [], [], []
+            summary = "LLM timed out — keyword scan only"
+            all_novel = []
 
-    finally:
-        # Stop ollama
-        if ollama_proc:
-            ollama_proc.terminate()
-            try:
-                ollama_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                ollama_proc.kill()
+        finally:
+            # Stop ollama
+            if ollama_proc:
+                ollama_proc.terminate()
+                try:
+                    ollama_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    ollama_proc.kill()
 
     # Build timing summary from LLM_CALL_STATS
     total_wall = sum(s.get("wall_s", 0) for s in LLM_CALL_STATS)
