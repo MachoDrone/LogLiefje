@@ -1,5 +1,5 @@
 # LogLiefje AI — Nosana node log analysis container
-# v0.03.9
+# v0.04.0
 #
 # Based on ollama/ollama for full GPU support (CUDA 12/13, cuBLAS, etc.)
 # with Python added on top for the analysis pipeline.
@@ -33,7 +33,7 @@ RUN chmod +x entrypoint.sh
 VOLUME ["/input", "/root/.ollama"]
 
 # Version label (checked by LogLiefje-ai.sh for auto-rebuild)
-LABEL logliefje.version="0.03.9"
+LABEL logliefje.version="0.04.0"
 
 # Environment
 ENV PYTHONUNBUFFERED=1

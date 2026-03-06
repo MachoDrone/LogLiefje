@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.03.9
+Version: 0.04.0
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.03.9"
+VERSION = "0.04.0"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -59,14 +59,20 @@ def get_node_id():
 
 
 def get_inference_mode():
-    """Determine GPU vs CPU inference.
+    """Determine GPU vs CPU vs no-AI inference.
 
     Host already checks Nosana job status and VRAM — passes FORCE_CPU=1.
     Container only checks:
-    1. FORCE_CPU env var → CPU
-    2. nvidia-smi missing → CPU (belt-and-suspenders)
-    3. All clear → GPU
+    1. FORCE_NO_AI env var → no-ai (keyword-scan-only)
+    2. FORCE_CPU env var → CPU (3b LLM)
+    3. nvidia-smi missing → CPU (belt-and-suspenders)
+    4. All clear → GPU
     """
+    # Step 0: no-AI mode — keyword-scan-only, no LLM at all
+    if os.environ.get("FORCE_NO_AI"):
+        eprint("[analyze] Mode: no-ai (keyword-scan-only, LLM skipped)")
+        return "no-ai"
+
     # Step 1: forced CPU override (set by host detection)
     if os.environ.get("FORCE_CPU"):
         eprint("[analyze] Mode: CPU (forced via FORCE_CPU env)")
@@ -638,13 +644,13 @@ def main():
     coverage_pct = (lines_sent / total_unclassified * 100) if total_unclassified > 0 else 100.0
     eprint(f"[analyze] Coverage: {lines_sent}/{total_unclassified} unclassified lines sent to LLM ({coverage_pct:.0f}%)")
 
-    # CPU mode: keyword-scan-only (LLM too slow on CPU-only nodes)
-    if mode == "cpu":
-        eprint("[analyze] CPU mode — keyword-scan-only (LLM skipped)")
+    # No-AI mode: keyword-scan-only (no LLM)
+    if mode == "no-ai":
+        eprint("[analyze] No-AI mode — keyword-scan-only (LLM skipped)")
         pass1_status = "skipped"
         pass2_status = "skipped"
         interpretations, healthy_signals = [], []
-        summary = "CPU mode — keyword scan only"
+        summary = "Keyword scan only — no LLM"
         all_novel = []
     else:
         ollama_proc = start_ollama(mode)
