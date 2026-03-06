@@ -1,8 +1,8 @@
 # LogLiefje AI — Nosana node log analysis container
-# v0.03.8
+# v0.03.9
 #
-# Multi-stage build: copies ollama binary + GPU/CPU runner libraries from
-# the official image. GPU access provided at runtime via --gpus all.
+# Based on ollama/ollama for full GPU support (CUDA 12/13, cuBLAS, etc.)
+# with Python added on top for the analysis pipeline.
 #
 # Build:  docker build -t logliefje-ai:latest ./logliefje-ai/
 # Run:    docker run --rm [--gpus all] \
@@ -11,18 +11,12 @@
 #           -e GITHUB_TOKEN=... \
 #           logliefje-ai:latest
 
-# Stage 1: Extract ollama binary + runtime libs from official image
-FROM ollama/ollama:latest AS ollama-src
+FROM ollama/ollama:latest
 
-# Stage 2: Minimal runtime
-FROM python:3.11-slim
-
-# Copy ollama binary and GPU/CPU runner libraries
-COPY --from=ollama-src /bin/ollama /usr/local/bin/ollama
-COPY --from=ollama-src /usr/lib/ollama /usr/lib/ollama
-
-# System deps (git for keyword_sync, curl for API calls)
+# Install Python 3 + system deps (git for keyword_sync, curl for API calls)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
     curl \
     git \
     ca-certificates \
@@ -39,7 +33,7 @@ RUN chmod +x entrypoint.sh
 VOLUME ["/input", "/root/.ollama"]
 
 # Version label (checked by LogLiefje-ai.sh for auto-rebuild)
-LABEL logliefje.version="0.03.8"
+LABEL logliefje.version="0.03.9"
 
 # Environment
 ENV PYTHONUNBUFFERED=1
