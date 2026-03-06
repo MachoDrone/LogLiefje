@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.03.2
+Version: 0.03.3
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.03.2"
+VERSION = "0.03.3"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -47,6 +47,7 @@ INFERENCE_MODE = "gpu"  # set in main() after get_inference_mode()
 
 LLM_CALL_STATS = []     # populated by query_llm() as side effect
 _CURRENT_PASS_LABEL = "unknown"  # set before each LLM call
+_CURL_TIMEOUT = 300     # seconds — set in main() to match effective_timeout
 
 
 def get_node_id():
@@ -142,11 +143,11 @@ def query_llm(prompt, system=SYSTEM_PROMPT, max_tokens=4096):
 
     try:
         result = subprocess.run(
-            ["curl", "-s", "--max-time", "300", "-X", "POST",
+            ["curl", "-s", "--max-time", str(_CURL_TIMEOUT), "-X", "POST",
              f"{OLLAMA_URL}/api/generate",
              "-H", "Content-Type: application/json",
              "-d", payload],
-            capture_output=True, text=True, timeout=310,
+            capture_output=True, text=True, timeout=_CURL_TIMEOUT + 10,
         )
         if result.returncode == 0:
             response = json.loads(result.stdout)
@@ -620,6 +621,10 @@ def main():
     effective_max_unclassified = MAX_UNCLASSIFIED_LINES_CPU if mode == "cpu" else MAX_UNCLASSIFIED_LINES
     effective_num_predict = NUM_PREDICT_CPU if mode == "cpu" else 4096
     effective_timeout = LLM_TIMEOUT_CPU if mode == "cpu" else LLM_TIMEOUT
+
+    # Set curl timeout to match effective LLM timeout
+    global _CURL_TIMEOUT
+    _CURL_TIMEOUT = effective_timeout
 
     # Coverage stats
     lines_sent = min(total_unclassified, effective_max_unclassified)
