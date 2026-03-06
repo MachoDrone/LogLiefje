@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.03.4
+Version: 0.03.5
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.03.4"
+VERSION = "0.03.5"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -130,15 +130,19 @@ def start_ollama(mode):
 def query_llm(prompt, system=SYSTEM_PROMPT, max_tokens=4096):
     """Send a prompt to the local LLM via ollama API."""
     _call_start = time.time()
+    options = {
+        "temperature": 0.3,
+        "num_predict": max_tokens,
+    }
+    if INFERENCE_MODE == "cpu":
+        options["num_gpu"] = 0
+
     payload = json.dumps({
         "model": MODEL_NAME,
         "prompt": prompt,
         "system": system,
         "stream": False,
-        "options": {
-            "temperature": 0.3,
-            "num_predict": max_tokens,
-        },
+        "options": options,
     })
 
     try:
