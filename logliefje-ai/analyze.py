@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.04.1
+Version: 0.04.2
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.04.1"
+VERSION = "0.04.2"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -689,18 +689,23 @@ def main():
                 pass1_status = "empty"
             eprint(f"[analyze] Pass 1 (error analysis): {pass1_elapsed:.1f}s [{pass1_status}]")
 
-            # 8. Keyword discovery pass
-            pass2_start = time.time()
-            novel_kws_2 = run_keyword_discovery(unclassified, existing_kws)
-            pass2_elapsed = time.time() - pass2_start
-            pass2_failed = any(s.get("label") == "keyword_discovery" and "error" in s for s in LLM_CALL_STATS)
-            if pass2_failed:
-                pass2_status = "failed"
-            elif novel_kws_2:
-                pass2_status = "ok"
+            # 8. Keyword discovery pass (GPU only — CPU inference hallucinates)
+            if mode == "cpu":
+                novel_kws_2 = []
+                pass2_status = "skipped"
+                eprint("[analyze] Pass 2 (keyword discovery): skipped (CPU mode)")
             else:
-                pass2_status = "empty"
-            eprint(f"[analyze] Pass 2 (keyword discovery): {pass2_elapsed:.1f}s [{pass2_status}]")
+                pass2_start = time.time()
+                novel_kws_2 = run_keyword_discovery(unclassified, existing_kws)
+                pass2_elapsed = time.time() - pass2_start
+                pass2_failed = any(s.get("label") == "keyword_discovery" and "error" in s for s in LLM_CALL_STATS)
+                if pass2_failed:
+                    pass2_status = "failed"
+                elif novel_kws_2:
+                    pass2_status = "ok"
+                else:
+                    pass2_status = "empty"
+                eprint(f"[analyze] Pass 2 (keyword discovery): {pass2_elapsed:.1f}s [{pass2_status}]")
 
             signal.alarm(0)  # Cancel timeout — LLM work finished
 
