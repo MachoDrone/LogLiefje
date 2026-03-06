@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.03.6
+Version: 0.03.7
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.03.6"
+VERSION = "0.03.7"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -578,6 +578,7 @@ def query_llm_with_spinner(prompt, system=SYSTEM_PROMPT, max_tokens=4096):
 
 def main():
     """Main analysis pipeline."""
+    _pipeline_start = time.time()
     eprint(f"[LogLiefje AI v{VERSION}]")
 
     # 1. Read input
@@ -608,11 +609,13 @@ def main():
 
     # 5. Keyword scan
     eprint("[analyze] Running keyword scan...")
+    _scan_start = time.time()
     found_errors, unclassified = keyword_scan(
         sections, keywords_data, patterns_data, false_positives_data
     )
+    _scan_elapsed = time.time() - _scan_start
     total_unclassified = len(unclassified)
-    eprint(f"[analyze] Keyword scan: {len(found_errors)} errors, {total_unclassified} unclassified lines")
+    eprint(f"[analyze] Keyword scan: {len(found_errors)} errors, {total_unclassified} unclassified lines ({_scan_elapsed:.2f}s)")
 
     # 6. Determine inference mode, select model, start LLM
     mode = get_inference_mode()
@@ -787,7 +790,8 @@ def main():
         f.write(report)
 
     print(f"[analyze] Report written to {OUTPUT_FILE}", file=sys.stderr)
-    print(f"[analyze] Done — {len(errors)} errors, {len(all_novel)} new keywords", file=sys.stderr)
+    _pipeline_elapsed = time.time() - _pipeline_start
+    print(f"[analyze] Done — {len(errors)} errors, {len(all_novel)} new keywords ({_pipeline_elapsed:.1f}s total)", file=sys.stderr)
 
     # 13. Print report to stdout (captured by LogLiefje-ai.sh)
     print(REPORT_MARKER)
