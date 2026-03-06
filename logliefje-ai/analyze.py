@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.03.1
+Version: 0.03.2
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.03.1"
+VERSION = "0.03.2"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -372,8 +372,13 @@ def run_llm_analysis(found_errors, unclassified, container_state, existing_keywo
     response = query_llm_with_spinner(prompt, max_tokens=max_tokens)
 
     if not response:
-        eprint("[analyze] LLM returned empty response — using keyword-only results")
-        return [], [], [], "LLM analysis unavailable — keyword scan only"
+        llm_failed = any("error" in s for s in LLM_CALL_STATS)
+        if llm_failed:
+            eprint("[analyze] LLM call failed — using keyword-only results")
+            return [], [], [], "LLM failed — keyword scan only"
+        else:
+            eprint("[analyze] LLM returned empty response — using keyword-only results")
+            return [], [], [], "LLM returned empty — keyword scan only"
 
     # Parse JSON from LLM response
     return _parse_llm_response(response, existing_keywords)
@@ -651,16 +656,29 @@ def main():
             max_tokens=effective_num_predict,
         )
         pass1_elapsed = time.time() - pass1_start
-        pass1_status = "ok" if interpretations or summary != "LLM analysis unavailable — keyword scan only" else "empty"
-        eprint(f"[analyze] Pass 1 (error analysis): {pass1_elapsed:.1f}s")
+        # Check if the LLM call itself failed (curl error, timeout, etc.)
+        pass1_failed = any(s.get("label") == "error_analysis" and "error" in s for s in LLM_CALL_STATS)
+        if pass1_failed:
+            pass1_status = "failed"
+        elif interpretations:
+            pass1_status = "ok"
+        else:
+            pass1_status = "empty"
+        eprint(f"[analyze] Pass 1 (error analysis): {pass1_elapsed:.1f}s [{pass1_status}]")
 
         # 8. Keyword discovery pass (skipped in CPU mode to save time)
         if mode == "gpu":
             pass2_start = time.time()
             novel_kws_2 = run_keyword_discovery(unclassified, existing_kws)
             pass2_elapsed = time.time() - pass2_start
-            pass2_status = "ok" if novel_kws_2 else "empty"
-            eprint(f"[analyze] Pass 2 (keyword discovery): {pass2_elapsed:.1f}s")
+            pass2_failed = any(s.get("label") == "keyword_discovery" and "error" in s for s in LLM_CALL_STATS)
+            if pass2_failed:
+                pass2_status = "failed"
+            elif novel_kws_2:
+                pass2_status = "ok"
+            else:
+                pass2_status = "empty"
+            eprint(f"[analyze] Pass 2 (keyword discovery): {pass2_elapsed:.1f}s [{pass2_status}]")
         else:
             eprint("[analyze] CPU mode — skipping keyword discovery pass")
             novel_kws_2 = []
