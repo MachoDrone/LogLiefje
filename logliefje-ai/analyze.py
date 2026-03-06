@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.03.3
+Version: 0.03.4
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.03.3"
+VERSION = "0.03.4"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -41,7 +41,7 @@ KEYWORD_CONFIDENCE_THRESHOLD = 0.7
 # CPU-lite mode: reduced parameters for faster CPU inference
 MAX_UNCLASSIFIED_LINES_CPU = 75
 NUM_PREDICT_CPU = 2048
-LLM_TIMEOUT_CPU = 360
+LLM_TIMEOUT_CPU = 900  # 15 min — generous to capture real timing data
 
 INFERENCE_MODE = "gpu"  # set in main() after get_inference_mode()
 
