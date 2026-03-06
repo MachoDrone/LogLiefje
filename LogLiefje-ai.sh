@@ -24,7 +24,7 @@ if ! command -v jq &>/dev/null; then
 fi
 
 IMAGE_NAME="logliefje-ai:latest"
-AI_VERSION="0.03.0"
+AI_VERSION="0.03.1"
 GITHUB_BRANCH="${LOGLIEFJE_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/MachoDrone/LogLiefje/refs/heads/${GITHUB_BRANCH}"
 EXPIRATION="72h"
@@ -43,7 +43,7 @@ for arg in "$@"; do
     --test)      TEST_MODE=true ;;
     --cpu)       FORCE_CPU=true ;;
     --gpu)       FORCE_GPU=true ;;
-    --no-upload) NO_UPLOAD=true ;;
+    --no-upload|--noupload) NO_UPLOAD=true ;;
     --100)       FULL_LOGS=true ;;
   esac
 done
