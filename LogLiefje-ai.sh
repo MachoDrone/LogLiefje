@@ -214,8 +214,15 @@ else
             echo "Running AI analysis (CPU mode)..."
         fi
 
+        # Pass log scope to container
+        if [ "$FULL_LOGS" = true ]; then
+            LOG_SCOPE_ENV="-e LOG_SCOPE=full"
+        else
+            LOG_SCOPE_ENV="-e LOG_SCOPE=48h"
+        fi
+
         # Capture stdout only (has report markers); stderr goes to terminal
-        DOCKER_STDOUT=$(docker run --rm $GPU_FLAG $FORCE_CPU_ENV \
+        DOCKER_STDOUT=$(docker run --rm $GPU_FLAG $FORCE_CPU_ENV $LOG_SCOPE_ENV \
             -v "$(pwd)/mylog.txt:/input/mylogs.txt:ro" \
             -v logliefje-model-cache:/root/.ollama \
             ${GITHUB_TOKEN:+-e GITHUB_TOKEN="$GITHUB_TOKEN"} \

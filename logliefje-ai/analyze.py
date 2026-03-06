@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.02.9
+Version: 0.03.0
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.02.9"
+VERSION = "0.03.0"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -44,6 +44,9 @@ NUM_PREDICT_CPU = 2048
 LLM_TIMEOUT_CPU = 360
 
 INFERENCE_MODE = "gpu"  # set in main() after get_inference_mode()
+
+LLM_CALL_STATS = []     # populated by query_llm() as side effect
+_CURRENT_PASS_LABEL = "unknown"  # set before each LLM call
 
 
 def get_node_id():
@@ -125,6 +128,7 @@ def start_ollama(mode):
 
 def query_llm(prompt, system=SYSTEM_PROMPT, max_tokens=4096):
     """Send a prompt to the local LLM via ollama API."""
+    _call_start = time.time()
     payload = json.dumps({
         "model": MODEL_NAME,
         "prompt": prompt,
@@ -146,8 +150,23 @@ def query_llm(prompt, system=SYSTEM_PROMPT, max_tokens=4096):
         )
         if result.returncode == 0:
             response = json.loads(result.stdout)
+            wall_s = time.time() - _call_start
+            LLM_CALL_STATS.append({
+                "label": _CURRENT_PASS_LABEL,
+                "wall_s": wall_s,
+                "eval_count": response.get("eval_count", 0),
+                "eval_duration_ns": response.get("eval_duration", 0),
+                "prompt_eval_count": response.get("prompt_eval_count", 0),
+                "total_duration_ns": response.get("total_duration", 0),
+            })
             return response.get("response", "")
     except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError) as e:
+        wall_s = time.time() - _call_start
+        LLM_CALL_STATS.append({
+            "label": _CURRENT_PASS_LABEL,
+            "wall_s": wall_s,
+            "error": str(e),
+        })
         print(f"[analyze] LLM query failed: {e}", file=sys.stderr)
 
     return ""
@@ -339,6 +358,8 @@ def run_llm_analysis(found_errors, unclassified, container_state, existing_keywo
         container_state=state_str,
     )
 
+    global _CURRENT_PASS_LABEL
+    _CURRENT_PASS_LABEL = "error_analysis"
     eprint("[analyze] Querying LLM for error analysis...")
     response = query_llm_with_spinner(prompt, max_tokens=max_tokens)
 
@@ -401,6 +422,8 @@ def run_keyword_discovery(unclassified, existing_keywords):
         existing_patterns=existing_str,
     )
 
+    global _CURRENT_PASS_LABEL
+    _CURRENT_PASS_LABEL = "keyword_discovery"
     eprint("[analyze] Querying LLM for keyword discovery...")
     response = query_llm_with_spinner(prompt)
 
@@ -548,6 +571,10 @@ def main():
         log_text = f.read()
     eprint(f"[analyze] Read {len(log_text)} bytes from {INPUT_FILE}")
 
+    # Read log scope from environment (set by LogLiefje-ai.sh)
+    log_scope = os.environ.get("LOG_SCOPE", "48h")
+    eprint(f"[analyze] Log scope: {log_scope}")
+
     # 2. Pull keywords
     eprint("[analyze] Pulling keywords from repository...")
     keywords_data, patterns_data, false_positives_data = pull_keywords()
@@ -566,7 +593,8 @@ def main():
     found_errors, unclassified = keyword_scan(
         sections, keywords_data, patterns_data, false_positives_data
     )
-    eprint(f"[analyze] Keyword scan: {len(found_errors)} errors, {len(unclassified)} unclassified lines")
+    total_unclassified = len(unclassified)
+    eprint(f"[analyze] Keyword scan: {len(found_errors)} errors, {total_unclassified} unclassified lines")
 
     # 6. Determine inference mode, select model, start LLM
     mode = get_inference_mode()
@@ -580,6 +608,11 @@ def main():
     effective_num_predict = NUM_PREDICT_CPU if mode == "cpu" else 4096
     effective_timeout = LLM_TIMEOUT_CPU if mode == "cpu" else LLM_TIMEOUT
 
+    # Coverage stats
+    lines_sent = min(total_unclassified, effective_max_unclassified)
+    coverage_pct = (lines_sent / total_unclassified * 100) if total_unclassified > 0 else 100.0
+    eprint(f"[analyze] Coverage: {lines_sent}/{total_unclassified} unclassified lines sent to LLM ({coverage_pct:.0f}%)")
+
     if mode == "cpu":
         eprint(f"[analyze] CPU-lite: max_unclassified={effective_max_unclassified}, "
                f"num_predict={effective_num_predict}, timeout={effective_timeout}s, "
@@ -589,23 +622,37 @@ def main():
     def _llm_timeout_handler(signum, frame):
         raise TimeoutError("LLM inference exceeded time limit")
 
+    # Pass status tracking
+    pass1_status = "pending"
+    pass2_status = "skipped" if mode == "cpu" else "pending"
+    pass1_elapsed = 0.0
+    pass2_elapsed = 0.0
+
     try:
         # Start LLM timeout (covers only inference, not model download/startup)
         signal.signal(signal.SIGALRM, _llm_timeout_handler)
         signal.alarm(effective_timeout)
         eprint(f"[analyze] LLM timeout: {effective_timeout}s starts now")
 
-        # 7. LLM analysis
+        # 7. LLM analysis (pass 1)
         existing_kws = keywords_data.get("keywords", [])
+        pass1_start = time.time()
         interpretations, novel_kws_1, healthy_signals, summary = run_llm_analysis(
             found_errors, unclassified, container_state, existing_kws,
             max_unclassified=effective_max_unclassified,
             max_tokens=effective_num_predict,
         )
+        pass1_elapsed = time.time() - pass1_start
+        pass1_status = "ok" if interpretations or summary != "LLM analysis unavailable — keyword scan only" else "empty"
+        eprint(f"[analyze] Pass 1 (error analysis): {pass1_elapsed:.1f}s")
 
         # 8. Keyword discovery pass (skipped in CPU mode to save time)
         if mode == "gpu":
+            pass2_start = time.time()
             novel_kws_2 = run_keyword_discovery(unclassified, existing_kws)
+            pass2_elapsed = time.time() - pass2_start
+            pass2_status = "ok" if novel_kws_2 else "empty"
+            eprint(f"[analyze] Pass 2 (keyword discovery): {pass2_elapsed:.1f}s")
         else:
             eprint("[analyze] CPU mode — skipping keyword discovery pass")
             novel_kws_2 = []
@@ -626,6 +673,11 @@ def main():
     except TimeoutError:
         signal.alarm(0)
         eprint(f"[analyze] LLM timed out after {effective_timeout}s — using keyword-only results")
+        # Mark whichever pass was running as timeout
+        if pass1_status == "pending":
+            pass1_status = "timeout"
+        elif pass2_status == "pending":
+            pass2_status = "timeout"
         interpretations, novel_kws_1, healthy_signals = [], [], []
         summary = "LLM timed out — keyword scan only"
         all_novel = []
@@ -638,6 +690,36 @@ def main():
                 ollama_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 ollama_proc.kill()
+
+    # Build timing summary from LLM_CALL_STATS
+    total_wall = sum(s.get("wall_s", 0) for s in LLM_CALL_STATS)
+    total_tokens = sum(s.get("eval_count", 0) for s in LLM_CALL_STATS)
+    overall_toks = total_tokens / total_wall if total_wall > 0 else 0.0
+
+    timing_data = {
+        "log_scope": log_scope,
+        "lines_sent": lines_sent,
+        "total_unclassified": total_unclassified,
+        "coverage_pct": coverage_pct,
+        "pass1_status": pass1_status,
+        "pass2_status": pass2_status,
+        "total_wall": total_wall,
+        "total_tokens": total_tokens,
+        "overall_toks": overall_toks,
+        "calls": LLM_CALL_STATS,
+    }
+
+    # Print final timing summary to stderr
+    eprint(f"[analyze] Total LLM wall time: {total_wall:.1f}s, tokens generated: {total_tokens}")
+    for s in LLM_CALL_STATS:
+        label = s.get("label", "unknown")
+        w = s.get("wall_s", 0)
+        ec = s.get("eval_count", 0)
+        tps = ec / w if w > 0 else 0.0
+        if "error" in s:
+            eprint(f"[analyze]   {label}: {w:.1f}s wall, error: {s['error']}")
+        else:
+            eprint(f"[analyze]   {label}: {w:.1f}s wall, {ec} tokens, {tps:.1f} tok/s")
 
     # 9. Build final error list
     errors = build_error_list(found_errors, interpretations, all_novel)
@@ -660,6 +742,7 @@ def main():
         inference_mode=mode,
         keywords_loaded=keywords_loaded,
         keywords_new=len(all_novel),
+        timing_data=timing_data,
     )
 
     # 12. Write output (file stays inside container, vanishes with --rm)
