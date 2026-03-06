@@ -1,6 +1,6 @@
 #!/bin/bash
 # LogLiefje AI container entrypoint
-# v0.04.0 — --no-ai for keyword-scan-only, --cpu for 3b LLM on CPU
+# v0.04.1 — --no-ai for keyword-scan-only, --cpu for 7b LLM on CPU
 set -e
 
 echo "=== LogLiefje AI Container ===" >&2
@@ -34,8 +34,8 @@ done
 
 # Select model based on mode
 if [ "${FORCE_CPU}" = "1" ]; then
-    MODEL="qwen2.5:3b"
-    MODEL_SIZE="~1.9GB"
+    MODEL="qwen2.5:7b"
+    MODEL_SIZE="~4.5GB"
 else
     MODEL="qwen2.5:7b"
     MODEL_SIZE="~4.5GB"

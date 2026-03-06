@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.04.0
+Version: 0.04.1
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.04.0"
+VERSION = "0.04.1"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -32,7 +32,7 @@ REPORT_MARKER = "===LOGLIEFJE_REPORT_START==="
 REPORT_END_MARKER = "===LOGLIEFJE_REPORT_END==="
 OLLAMA_URL = "http://localhost:11434"
 MODEL_NAME_GPU = "qwen2.5:7b"
-MODEL_NAME_CPU = "qwen2.5:3b"
+MODEL_NAME_CPU = "qwen2.5:7b"
 MODEL_NAME = MODEL_NAME_GPU  # set after get_inference_mode()
 MAX_LOG_LINES_TO_LLM = 500
 MAX_UNCLASSIFIED_LINES = 200
