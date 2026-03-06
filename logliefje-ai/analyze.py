@@ -160,6 +160,14 @@ def query_llm(prompt, system=SYSTEM_PROMPT, max_tokens=4096):
                 "total_duration_ns": response.get("total_duration", 0),
             })
             return response.get("response", "")
+        else:
+            wall_s = time.time() - _call_start
+            LLM_CALL_STATS.append({
+                "label": _CURRENT_PASS_LABEL,
+                "wall_s": wall_s,
+                "error": f"curl exit {result.returncode}",
+            })
+            print(f"[analyze] LLM query failed: curl exit {result.returncode}", file=sys.stderr)
     except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError) as e:
         wall_s = time.time() - _call_start
         LLM_CALL_STATS.append({
