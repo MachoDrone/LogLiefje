@@ -4,7 +4,7 @@
 Reads mylogs.txt, applies keyword scanning, runs LLM analysis,
 discovers new keywords, and produces error-report.txt.
 
-Version: 0.02.3
+Version: 0.02.9
 """
 
 import json
@@ -23,7 +23,7 @@ from keyword_sync import pull_keywords, push_new_keywords
 from prompts import ERROR_ANALYSIS_PROMPT, KEYWORD_DISCOVERY_PROMPT, SYSTEM_PROMPT
 from report_formatter import format_report
 
-VERSION = "0.02.8"
+VERSION = "0.02.9"
 LLM_TIMEOUT = 600  # seconds — covers only LLM inference, not model download
 INPUT_FILE = "/input/mylogs.txt"
 OUTPUT_DIR = "/output"
@@ -37,6 +37,13 @@ MODEL_NAME = MODEL_NAME_GPU  # set after get_inference_mode()
 MAX_LOG_LINES_TO_LLM = 500
 MAX_UNCLASSIFIED_LINES = 200
 KEYWORD_CONFIDENCE_THRESHOLD = 0.7
+
+# CPU-lite mode: reduced parameters for faster CPU inference
+MAX_UNCLASSIFIED_LINES_CPU = 75
+NUM_PREDICT_CPU = 2048
+LLM_TIMEOUT_CPU = 360
+
+INFERENCE_MODE = "gpu"  # set in main() after get_inference_mode()
 
 
 def get_node_id():
@@ -116,7 +123,7 @@ def start_ollama(mode):
     return proc
 
 
-def query_llm(prompt, system=SYSTEM_PROMPT):
+def query_llm(prompt, system=SYSTEM_PROMPT, max_tokens=4096):
     """Send a prompt to the local LLM via ollama API."""
     payload = json.dumps({
         "model": MODEL_NAME,
@@ -125,7 +132,7 @@ def query_llm(prompt, system=SYSTEM_PROMPT):
         "stream": False,
         "options": {
             "temperature": 0.3,
-            "num_predict": 4096,
+            "num_predict": max_tokens,
         },
     })
 
@@ -297,7 +304,8 @@ def _dedup_errors(errors):
     return list(key_map.values())
 
 
-def run_llm_analysis(found_errors, unclassified, container_state, existing_keywords):
+def run_llm_analysis(found_errors, unclassified, container_state, existing_keywords,
+                     max_unclassified=MAX_UNCLASSIFIED_LINES, max_tokens=4096):
     """Run LLM analysis on the log data.
 
     Returns (error_interpretations, novel_keywords, healthy_signals, summary).
@@ -313,7 +321,7 @@ def run_llm_analysis(found_errors, unclassified, container_state, existing_keywo
 
     # Format unclassified sections (sample)
     if unclassified:
-        sample = unclassified[:MAX_UNCLASSIFIED_LINES]
+        sample = unclassified[:max_unclassified]
         unclass_str = "\n".join(
             f"  line {ln}: [{sec}] {text[:200]}"
             for text, ln, sec in sample
@@ -332,7 +340,7 @@ def run_llm_analysis(found_errors, unclassified, container_state, existing_keywo
     )
 
     eprint("[analyze] Querying LLM for error analysis...")
-    response = query_llm_with_spinner(prompt)
+    response = query_llm_with_spinner(prompt, max_tokens=max_tokens)
 
     if not response:
         eprint("[analyze] LLM returned empty response — using keyword-only results")
@@ -515,13 +523,13 @@ def _spinner(stop_event):
     sys.stderr.flush()
 
 
-def query_llm_with_spinner(prompt, system=SYSTEM_PROMPT):
+def query_llm_with_spinner(prompt, system=SYSTEM_PROMPT, max_tokens=4096):
     """Wrap query_llm with a spinner for visual feedback."""
     stop = threading.Event()
     t = threading.Thread(target=_spinner, args=(stop,), daemon=True)
     t.start()
     try:
-        return query_llm(prompt, system)
+        return query_llm(prompt, system, max_tokens=max_tokens)
     finally:
         stop.set()
         t.join(timeout=2)
@@ -562,11 +570,20 @@ def main():
 
     # 6. Determine inference mode, select model, start LLM
     mode = get_inference_mode()
-    global MODEL_NAME
+    global MODEL_NAME, INFERENCE_MODE
     MODEL_NAME = MODEL_NAME_CPU if mode == "cpu" else MODEL_NAME_GPU
+    INFERENCE_MODE = mode
     eprint(f"[analyze] Using model: {MODEL_NAME}")
+
+    # CPU-lite adjustments
+    effective_max_unclassified = MAX_UNCLASSIFIED_LINES_CPU if mode == "cpu" else MAX_UNCLASSIFIED_LINES
+    effective_num_predict = NUM_PREDICT_CPU if mode == "cpu" else 4096
+    effective_timeout = LLM_TIMEOUT_CPU if mode == "cpu" else LLM_TIMEOUT
+
     if mode == "cpu":
-        eprint("[analyze] CPU mode (3b) — please wait...")
+        eprint(f"[analyze] CPU-lite: max_unclassified={effective_max_unclassified}, "
+               f"num_predict={effective_num_predict}, timeout={effective_timeout}s, "
+               f"keyword_discovery=skipped")
     ollama_proc = start_ollama(mode)
 
     def _llm_timeout_handler(signum, frame):
@@ -575,17 +592,23 @@ def main():
     try:
         # Start LLM timeout (covers only inference, not model download/startup)
         signal.signal(signal.SIGALRM, _llm_timeout_handler)
-        signal.alarm(LLM_TIMEOUT)
-        eprint(f"[analyze] LLM timeout: {LLM_TIMEOUT}s starts now")
+        signal.alarm(effective_timeout)
+        eprint(f"[analyze] LLM timeout: {effective_timeout}s starts now")
 
         # 7. LLM analysis
         existing_kws = keywords_data.get("keywords", [])
         interpretations, novel_kws_1, healthy_signals, summary = run_llm_analysis(
-            found_errors, unclassified, container_state, existing_kws
+            found_errors, unclassified, container_state, existing_kws,
+            max_unclassified=effective_max_unclassified,
+            max_tokens=effective_num_predict,
         )
 
-        # 8. Keyword discovery pass
-        novel_kws_2 = run_keyword_discovery(unclassified, existing_kws)
+        # 8. Keyword discovery pass (skipped in CPU mode to save time)
+        if mode == "gpu":
+            novel_kws_2 = run_keyword_discovery(unclassified, existing_kws)
+        else:
+            eprint("[analyze] CPU mode — skipping keyword discovery pass")
+            novel_kws_2 = []
 
         signal.alarm(0)  # Cancel timeout — LLM work finished
 
@@ -602,7 +625,7 @@ def main():
 
     except TimeoutError:
         signal.alarm(0)
-        eprint(f"[analyze] LLM timed out after {LLM_TIMEOUT}s — using keyword-only results")
+        eprint(f"[analyze] LLM timed out after {effective_timeout}s — using keyword-only results")
         interpretations, novel_kws_1, healthy_signals = [], [], []
         summary = "LLM timed out — keyword scan only"
         all_novel = []
