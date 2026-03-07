@@ -1,6 +1,6 @@
 #!/bin/bash
 # LogLiefje AI container entrypoint
-# v0.02.1 — mode-aware model selection (3b CPU / 7b GPU)
+# v0.04.1 — --no-ai for keyword-scan-only, --cpu for 7b LLM on CPU
 set -e
 
 echo "=== LogLiefje AI Container ===" >&2
@@ -13,7 +13,14 @@ if [ ! -f /input/mylogs.txt ]; then
     exit 1
 fi
 
-# Start ollama temporarily to check/pull model
+# No-AI mode: skip ollama entirely — keyword-scan-only
+if [ "${FORCE_NO_AI}" = "1" ]; then
+    echo "No-AI mode — skipping model download (keyword-scan-only)" >&2
+    cd /app
+    exec python3 analyze.py
+fi
+
+# Start ollama for model caching
 ollama serve &>/dev/null &
 OLLAMA_PID=$!
 
@@ -25,10 +32,10 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# Select model based on CPU/GPU mode
+# Select model based on mode
 if [ "${FORCE_CPU}" = "1" ]; then
-    MODEL="qwen2.5:3b"
-    MODEL_SIZE="~2GB"
+    MODEL="qwen2.5:7b"
+    MODEL_SIZE="~4.5GB"
 else
     MODEL="qwen2.5:7b"
     MODEL_SIZE="~4.5GB"

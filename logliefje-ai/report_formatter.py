@@ -14,6 +14,7 @@ def format_report(
     inference_mode="cpu",
     keywords_loaded=0,
     keywords_new=0,
+    timing_data=None,
 ):
     """Format the final error report.
 
@@ -41,6 +42,17 @@ def format_report(
     lines.append(f"Generated: {ts}")
     lines.append(f"Node: {node_id} | Model: {model_name} | Mode: {inference_mode.upper()}")
     lines.append(f"Keywords: {keywords_loaded} loaded ({keywords_new} new discovered)")
+    if timing_data is not None:
+        td = timing_data
+        lines.append(f"Log scope: {td.get('log_scope', '48h')}")
+        lines.append(f"Coverage: {td.get('lines_sent', 0)}/{td.get('total_unclassified', 0)} "
+                      f"unclassified lines analyzed ({td.get('coverage_pct', 0):.0f}%)")
+        lines.append(f"Passes: error_analysis={td.get('pass1_status', '?')}, "
+                      f"keyword_discovery={td.get('pass2_status', '?')}")
+        tw = td.get("total_wall", 0)
+        tt = td.get("total_tokens", 0)
+        tps = td.get("overall_toks", 0)
+        lines.append(f"LLM: {tw:.1f}s wall, {tt} tokens, {tps:.1f} tok/s")
     lines.append(f"Assessment: {summary}")
     lines.append("")
 
