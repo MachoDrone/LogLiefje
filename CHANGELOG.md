@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.00.91 — 2026-11-07
+
+- Capture API proxy logs and check DNS from inside the matching FRPC and Nosana containers, including when the collector is launched as a single downloaded script.
+- Compare local and public API responses in one timestamped snapshot before the bandwidth test. Each check reports its own result or reason it was unavailable.
+- Add per-node qualification timelines and observed target markets. Preserve comparison operators and report explicit retests, access and queue/job events alongside the latest measurements.
+
 ## v0.00.72 — 2026-02-26
 - **Added:** `--test` flag to route uploads to the test Slack channel instead of production. Usage: `bash LogLiefje.sh --test`
 
