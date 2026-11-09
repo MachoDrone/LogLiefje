@@ -79,12 +79,62 @@ class ProbeTests(unittest.TestCase):
         a = self.node
         b = self.node._replace(id='d'*64,name='nosana-node-two')
         mapping = {self.proxy.id:{'gateway':{}}, b.id:{'gateway':{'Aliases':['nosana-node']}}}
-        with patch.dict(self.mod,networks=lambda command,item:mapping.get(item.id,{})):
-            node,reason=self.mod['match_node']([], [a,b], self.proxy, 'nosana-node')
-            self.assertIsNone(node)
-            self.assertIn('ambiguous',reason)
-            mapping[b.id]={'other':{'Aliases':['nosana-node']}}
-            self.assertEqual(self.mod['match_node']([], [a,b], self.proxy, 'nosana-node')[0],a)
+        def networks_for(item):
+            return mapping.get(item.id,{})
+        node,reason=self.mod['match_node'](networks_for, [a,b], self.proxy, 'nosana-node')
+        self.assertIsNone(node)
+        self.assertIn('ambiguous',reason)
+        mapping[b.id]={'other':{'Aliases':['nosana-node']}}
+        self.assertEqual(self.mod['match_node'](networks_for, [a,b], self.proxy, 'nosana-node')[0],a)
+
+    def test_only_node_addresses_on_shared_networks_are_expected(self):
+        node = {'left': {'IPAddress': '192.0.2.74', 'GlobalIPv6Address': '2001:db8:0:0::74',
+                         'SecondaryIPAddresses': [{'Addr': '192.0.2.75', 'PrefixLength': 24}],
+                         'SecondaryIPv6Addresses': [{'Addr': '2001:db8::75', 'PrefixLength': 64}]},
+                'right': {'IPAddress': '198.51.100.74'},
+                'private': {'IPAddress': '203.0.113.1'}}
+        proxy = {'left': {'IPAddress': '192.0.2.33'}, 'right': {}}
+        self.assertEqual(self.mod['shared_node_ips'](proxy, node),
+                         {'192.0.2.74', '192.0.2.75', '198.51.100.74', '2001:db8::74', '2001:db8::75'})
+        self.assertEqual(self.mod['shared_node_ips']({'other': {}}, node), set())
+
+    def test_dns_only_answers_are_distinct_from_resolver_and_effective_lookup(self):
+        header = 'Server:\t\t192.0.2.53\nAddress:\t192.0.2.53:53\n\n'
+        def result(kind, rc, reply, expected=frozenset({'192.0.2.74', '2001:db8::74'})):
+            def capture(args, **kwargs):
+                self.assertEqual(args, ['exec', self.proxy.id, 'timeout', '4', 'nslookup',
+                                        '-type=' + kind, 'node-on-bridge-2.'])
+                return rc, reply
+            with patch.dict(self.mod, capture=capture):
+                return self.mod['direct_dns'](['exec', self.proxy.id], 'node-on-bridge-2', kind, expected)
+
+        single = header + 'Name:\tnode-on-bridge-2\nAddress: 192.0.2.74\n'
+        self.assertEqual(result('A', 0, single), '192.0.2.74 (matches node)')
+        self.assertEqual(result('A', 0, single, set()), '192.0.2.74 (node IP comparison unavailable)')
+        mixed = single + 'Name:\tnode-on-bridge-2\nAddress: 192.0.2.90\n'
+        self.assertIn('includes an address outside the matched node', result('A', 0, mixed))
+        self.assertEqual(result('AAAA', 0, header + 'Name: node-on-bridge-2\nAddress: 2001:db8::74\n'),
+                         '2001:db8::74 (matches node)')
+        self.assertEqual(result('AAAA', 0, header), 'no AAAA address records')
+        self.assertEqual(result('A', 1, header + "** server can't find node-on-bridge-2: NXDOMAIN\n"), 'NXDOMAIN')
+        self.assertEqual(result('A', 1, header + '** server returned: SERVFAIL\n'), 'SERVFAIL')
+        self.assertIn('tool unavailable', result('A', 127, ''))
+        self.assertIn('timeout', result('A', 124, ''))
+        self.assertEqual(result('A', 1, ';; connection timed out; no servers could be reached'),
+                         'unavailable (no DNS server responded)')
+        self.assertIn('unavailable', result('A', 1, 'BusyBox nslookup: invalid option'))
+
+    def test_hosts_lookup_outputs_only_addresses_for_the_exact_alias(self):
+        source = ('127.0.0.1 localhost\n203.0.113.45 private-name # ALIAS2\n'
+                  '192.0.2.32 alias2-old\n192.0.2.74 primary ALIAS2 # sensitive comment\n'
+                  '2001:db8::74 alias2\n')
+        def capture(args, **kwargs):
+            self.assertEqual(args[-1], '/etc/hosts')
+            proc = subprocess.run(args[:-1], input=source, text=True, capture_output=True, check=True)
+            return proc.returncode, proc.stdout
+        with patch.dict(self.mod, capture=capture):
+            self.assertEqual(self.mod['hosts_entry']([], 'alias2'), '192.0.2.74, 2001:db8::74')
+            self.assertEqual(self.mod['hosts_entry']([], 'alias-missing'), 'no entry')
 
     def test_collects_matching_nodes_from_two_wrappers_and_keeps_failed_dns(self):
         outer_a=self.node._replace(id='1'*64,name='podman-gpu0',image='nosana/podman:1.1.2',state='running')
@@ -100,6 +150,15 @@ class ProbeTests(unittest.TestCase):
         def capture(cmd,**kwargs):
             outer_id=cmd[2]
             wallet=WALLET_A if outer_id==outer_a.id else WALLET_B
+            ip='192.0.2.74' if outer_id==outer_a.id else '198.51.100.62'
+            if 'inspect' in cmd:
+                network='gpu-'+outer_id[:1]
+                return 0,json.dumps({network:{'IPAddress':ip}})
+            if 'nslookup' in cmd:
+                answer = 'Name: nosana-node\nAddress: '+ip+'\n' if '-type=A' in cmd else ''
+                return 0,'Server: 192.0.2.53\nAddress: 192.0.2.53:53\n\n'+answer
+            if cmd[-1]=='/etc/hosts':
+                return 0,''
             if 'awk' in cmd:
                 generated=route(wallet)+'auth.token = "SECRET"\n'
                 completed=subprocess.run(['awk',cmd[cmd.index('awk')+1]],input=generated,text=True,
@@ -124,13 +183,15 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(actual_routes,{outer_a.id:(self.node.id,WALLET_A),outer_b.id:(node_b.id,WALLET_B)})
         self.assertEqual(output.getvalue().count('FRPC DNS node alias nosana-node: failed (exit 2)'),2)
         self.assertEqual(output.getvalue().count('FRPC to node /: HTTP 200, identity matched (pass)'),2)
+        for ip in ('192.0.2.74','198.51.100.62'):
+            self.assertIn('FRPC direct DNS A nosana-node: '+ip+' (matches node)',output.getvalue())
         self.assertIn('wrapper exited',output.getvalue())
 
     def test_stopped_missing_support_independent_node_dns(self):
         with patch.dict(self.mod,capture=lambda *args,**kwargs:(127,'')):
             results=self.mod['frp_checks']([],self.proxy,{'alias':'nosana-node','server':SERVER,'wallet':WALLET_A,'port':8123},self.node)
-            self.assertEqual(len(results),4)
-            self.assertTrue(all('exit 127' in row for row in results))
+            self.assertTrue(any('no active shared-network IP verified' in row for row in results))
+            self.assertEqual(sum('exit 127' in row for row in results),7)
             self.assertIn('container exited',self.mod['node_checks']([],self.node._replace(state='exited'))[0])
         calls=[]
         def node_only(cmd,**kwargs):
@@ -226,6 +287,12 @@ http.get=get;https.get=get;
             outer=self.node._replace(name='podman',image='nosana/podman:1.1.2')
             for proxy_timeout in (False,True):
                 def capture(cmd, **kwargs):
+                    if 'inspect' in cmd:
+                        return 0,'{"custom-bridge":{"IPAddress":"192.0.2.20"}}'
+                    if 'nslookup' in cmd:
+                        return 0,'Server: 192.0.2.53\nAddress: 192.0.2.53:53\n'
+                    if cmd[-1]=='/etc/hosts':
+                        return 0,''
                     if 'awk' in cmd:
                         return 0,route(WALLET_A)
                     if 'cat' in cmd:

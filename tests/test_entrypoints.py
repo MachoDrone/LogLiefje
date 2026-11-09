@@ -133,7 +133,7 @@ exec /usr/bin/cat "$FIXTURE_SOURCE"''')
         self.assertTrue(report.isascii(), "final report should be ASCII")
         self.assertTrue(b"\0" not in report, "binary NUL in report")
         expected = [
-            b"log collector v0.00.91",
+            b"log collector v0.00.92",
             b"FRPC-EARLIEST-RETAINED",
             b"FRPC-FIXTURE-EVIDENCE",
             b"RECENT-FIXTURE",
@@ -145,10 +145,20 @@ exec /usr/bin/cat "$FIXTURE_SOURCE"''')
         ]
         probe_attempts = self.sandbox / "input/probe-attempts"
         if (self.bin / "python3").exists():
+            expected.extend([
+                b"Node IP on networks shared with FRPC: 192.0.2.74\n",
+                b"FRPC DNS node alias nosana-node: 192.0.2.74",
+                b"FRPC direct DNS A nosana-node: NXDOMAIN",
+                b"FRPC direct DNS AAAA nosana-node: NXDOMAIN",
+                b"FRPC /etc/hosts nosana-node: 192.0.2.74",
+                b"FRPC to node /: HTTP 200, identity matched (pass)",
+            ])
+            self.assertNotIn(b"PRIVATE-FIXTURE", report)
             self.assertTrue(probe_attempts.is_file(), "Podman 'Up' state should trigger live probes")
             probe_order = probe_attempts.read_text().splitlines()
             first_bandwidth = probe_order.index("bandwidth")
-            self.assertEqual(set(probe_order[:first_bandwidth]), {"frpc-local-api", "node"})
+            self.assertEqual(set(probe_order[:first_bandwidth]),
+                             {"frpc-local-api", "node", "dns-A", "dns-AAAA", "hosts-entry"})
             self.assertEqual(set(probe_order[first_bandwidth:]), {"bandwidth"})
         for marker in expected:
             self.assertTrue(marker in report, f"missing report marker {marker!r}")

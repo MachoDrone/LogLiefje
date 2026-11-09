@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.00.92 — 2026-11-09
+
+- Compare the matched node's shared-network addresses with direct A and AAAA answers from inside its API proxy. Report the proxy's hosts-file entry for the route alias alongside its existing name lookup and HTTP wallet check.
+
 ## v0.00.91 — 2026-11-07
 
 - Capture API proxy logs and check DNS from inside the matching FRPC and Nosana containers, including when the collector is launched as a single downloaded script.
