@@ -13,7 +13,7 @@ fi
 
 clear
 echo > mylog.txt
-echo "log collector v0.00.91" >> mylog.txt   # ← incremented
+echo "log collector v0.00.92" >> mylog.txt   # ← incremented
 cat mylog.txt
 
 # ------------- ARGUMENT PARSING -------------
@@ -295,6 +295,7 @@ _ll_container_network_report() {
 import collections
 import concurrent.futures
 import datetime
+import functools
 import ipaddress
 import json
 import os
@@ -512,16 +513,16 @@ def networks(podman, item):
         return {}
 
 
-def match_node(podman, nodes, proxy, alias):
+def match_node(networks_for, nodes, proxy, alias):
     exact = [node for node in nodes if node.name == alias]
     if len(nodes) == 1 and exact:
         return exact[0], ''
-    frp_networks = networks(podman, proxy)
+    frp_networks = networks_for(proxy)
     matches = list(exact)
     for node in nodes:
         if node in exact:
             continue
-        for key, conf in networks(podman, node).items():
+        for key, conf in networks_for(node).items():
             if (key in frp_networks and isinstance(conf, dict)
                     and alias in (conf.get('Aliases') or [])):
                 matches.append(node)
@@ -529,6 +530,23 @@ def match_node(podman, nodes, proxy, alias):
     if len(matches) == 1:
         return matches[0], ''
     return None, 'ambiguous node alias' if matches else 'matching node unavailable'
+
+
+def shared_node_ips(proxy_networks, node_networks):
+    result = set()
+    for network in proxy_networks.keys() & node_networks.keys():
+        attachment = node_networks[network]
+        if not isinstance(attachment, dict):
+            continue
+        values = [attachment.get('IPAddress'), attachment.get('GlobalIPv6Address')]
+        for field in ('SecondaryIPAddresses', 'SecondaryIPv6Addresses'):
+            secondary = attachment.get(field)
+            if isinstance(secondary, list):
+                values.extend(entry.get('Addr') for entry in secondary if isinstance(entry, dict))
+        for value in values:
+            if isinstance(value, str) and valid_ip(value):
+                result.add(str(ipaddress.ip_address(value)))
+    return result
 
 
 NODE_CHECKS = r"""
@@ -646,7 +664,58 @@ def failure(rc, details=()):
     return 'exit %s%s' % (rc, ', ' + explanation if explanation else '')
 
 
-def frp_checks(podman, proxy, route, node):
+def direct_dns(cmd, alias, record_type, expected_ips):
+    # Query the exact alias through FRPC's resolver, even when it has a DNS search suffix.
+    absolute_alias = alias if alias.endswith('.') else alias + '.'
+    rc, text = capture(cmd + ['timeout', '4', 'nslookup', '-type=' + record_type, absolute_alias],
+                       seconds=6, size=8192)
+    # Both BusyBox and BIND print the resolver's address before the first Name:.
+    # A resolver header by itself is also a valid response to a query with no records.
+    answers = set()
+    in_answer = False
+    for line in text.splitlines():
+        key, sep, value = line.strip().partition(':')
+        if key == 'Name' and sep:
+            in_answer = True
+        elif key == 'Server' and sep:
+            in_answer = False
+        elif in_answer and key == 'Address' and valid_ip(value.strip()):
+            ip = ipaddress.ip_address(value.strip())
+            if ip.version == (4 if record_type == 'A' else 6):
+                answers.add(str(ip))
+
+    if answers:
+        if not expected_ips:
+            comparison = 'node IP comparison unavailable'
+        elif answers <= expected_ips:
+            comparison = 'matches node'
+        else:
+            comparison = 'includes an address outside the matched node'
+        detail = ', incomplete query' if rc else ''
+        return ', '.join(sorted(answers)) + ' (' + comparison + detail + ')'
+    error = re.search(r":\s*(NXDOMAIN|SERVFAIL|REFUSED|FORMERR|NOTIMP)\s*$", text, re.M)
+    if error:
+        return error[1]
+    if 'no servers could be reached' in text.lower():
+        return 'unavailable (no DNS server responded)'
+    if not rc and re.search(r'^Server:\s*\S', text, re.M):
+        return 'no ' + record_type + ' address records'
+    return 'unavailable (' + (failure(rc) if rc else 'unrecognized nslookup output') + ')'
+
+
+def hosts_entry(cmd, alias):
+    # Only extract addresses for the route alias. Other hostnames and comments stay in FRPC.
+    select_alias = (r'{ sub(/#.*/, ""); for (i=2; i<=NF; i++) '
+                    r'if (tolower($i)==tolower(alias)) { print $1; break } }')
+    rc, text = capture(cmd + ['awk', '-v', 'alias=' + alias, select_alias, '/etc/hosts'], size=4096)
+    if rc:
+        return 'unavailable (' + failure(rc) + ')'
+    if not text.strip():
+        return 'no entry'
+    return addresses(text) or 'unavailable (invalid address)'
+
+
+def frp_checks(podman, proxy, route, node, expected_ips=frozenset()):
     if not running(proxy):
         return ['FRPC checks skipped: container ' + proxy.state]
     cmd = podman + ['exec', proxy.id]
@@ -684,14 +753,25 @@ def frp_checks(podman, proxy, route, node):
         start = time.monotonic()
         value = call(*args)
         return value + ' [%d ms]' % ((time.monotonic()-start)*1000)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
         tasks = [('FRPC resolver', pool.submit(timed,read_resolvers))]
         if route:
             tasks.append(('FRPC DNS server ' + route['server'], pool.submit(timed,dns,route['server'])))
         if node and route:
-            tasks.extend([('FRPC DNS node alias ' + route['alias'], pool.submit(timed,dns,route['alias'])),
+            alias = route['alias']
+            results.append('Node IP on networks shared with FRPC: ' +
+                           (', '.join(sorted(expected_ips)) or 'unavailable (no active shared-network IP verified)'))
+            tasks.append(('FRPC DNS node alias ' + alias, pool.submit(timed, dns, alias)))
+            if not valid_ip(alias):
+                for kind in ('A', 'AAAA'):
+                    tasks.append(('FRPC direct DNS ' + kind + ' ' + alias,
+                                  pool.submit(timed, direct_dns, cmd, alias, kind, expected_ips)))
+            else:
+                results.append('FRPC direct DNS skipped: route target is an IP address')
+            tasks.extend([('FRPC /etc/hosts ' + alias, pool.submit(timed, hosts_entry, cmd, alias)),
                           ('FRPC to node /', pool.submit(timed,root))])
-        results = [key + ': ' + task.result() for key,task in tasks]
+        results.extend(key + ': ' + task.result() for key,task in tasks)
     if not route:
         results.append('FRPC route-specific DNS/API skipped: no verified route')
     elif not node:
@@ -724,6 +804,12 @@ def report():
         proxies = [p for p in items if image_is(p, 'frpc') and re.fullmatch('frpc-api-' + WALLET,p.name)]
         if not proxies:
             print('  No matching FRPC container found; FRPC log capture unavailable.')
+
+        # Reuse the same network attachments when matching and comparing pairs in this wrapper.
+        @functools.lru_cache(maxsize=None)
+        def networks_for(item):
+            return networks(podman, item)
+
         seen = set()
         for proxy in proxies:
             wallet = proxy.name[len('frpc-api-'):]
@@ -751,18 +837,21 @@ def report():
                     start = start_value  # Some runtimes render the timestamp without JSON quotes.
                 route = config_route(current_log_config(log,start if isinstance(start,str) else ''),wallet)
                 source = 'same-startup log'
-            node, reason = match_node(podman,nodes,proxy,route['alias']) if route else (None,'no verified API route')
+            node, reason = match_node(networks_for,nodes,proxy,route['alias']) if route else (None,'no verified API route')
+            expected_ips = set()
             if route:
                 print('  API route (%s): %s.%s -> %s:%d' %
                       (source,wallet,route['server'],route['alias'],route['port']))
             if node:
                 seen.add(node.id)
                 print('  Node %s [%s] %s' % (node.name,node.id[:12],node.state))
+                if running(proxy) and running(node):
+                    expected_ips = shared_node_ips(networks_for(proxy), networks_for(node))
             else:
                 print('  Node association unavailable: ' + reason)
             print('  Live probe start UTC: ' + datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds'))
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                jobs = [pool.submit(frp_checks,podman,proxy,route,node)]
+                jobs = [pool.submit(frp_checks,podman,proxy,route,node,expected_ips)]
                 if node:
                     jobs.append(pool.submit(node_checks,podman,node,route))
                 for job in jobs:

@@ -54,6 +54,11 @@ if [[ "$1" == podman ]]; then
             exit ;;
         inspect)
             case "$*" in
+                *NetworkSettings.Networks*)
+                    case "${!#}" in
+                        "$node_id") echo '{"fixture-bridge":{"IPAddress":"192.0.2.74"},"unshared":{"IPAddress":"198.51.100.77"}}'; exit ;;
+                        "$proxy_id") echo '{"fixture-bridge":{"IPAddress":"192.0.2.21"}}'; exit ;;
+                    esac ;;
                 *LogConfig.Path*)
                     case "${!#}" in
                         "$node_id"|"$node_name") echo "$node_log"; exit ;;
@@ -67,8 +72,20 @@ if [[ "$1" == podman ]]; then
             # Only the attempted probe is recorded. Do not record command bodies.
             if [[ "${2:-}" == "$proxy_id" && "${3:-}" == awk && "${!#}" == /etc/frp/frpc.toml ]]; then
                 exec /usr/bin/cat "$FIXTURE_DIR/frpc.toml"
+            elif [[ "${2:-}" == "$proxy_id" && "${3:-}" == awk && "${!#}" == /etc/hosts ]]; then
+                echo hosts-entry >> "$FIXTURE_DIR/probe-attempts"
+                printf '192.0.2.74 primary NoSaNa-NoDe # PRIVATE-FIXTURE\n198.51.100.77 other\n' |
+                    /usr/bin/awk "${@:4:3}"
+                exit
+            elif [[ "${2:-}" == "$proxy_id" && "${5:-}" == nslookup && "${!#}" == "$node_name." ]]; then
+                echo "dns-${6#-type=}" >> "$FIXTURE_DIR/probe-attempts"
+                printf "Server: 192.0.2.53\nAddress: 192.0.2.53:53\n\n** server can't find %s: NXDOMAIN\n" "$node_name"
+                exit 1
+            elif [[ "${2:-}" == "$proxy_id" && "${5:-}" == getent && "${!#}" == "$node_name" ]]; then
+                printf '192.0.2.74 %s\n' "$node_name"; exit
             elif [[ "${2:-}" == "$proxy_id" && "${3:-}" == curl ]]; then
                 echo frpc-local-api >> "$FIXTURE_DIR/probe-attempts"
+                printf '"%s"\n200' "$FIXTURE_WALLET"; exit
             elif [[ "${2:-}" == "$node_id" && "${3:-}" == node ]]; then
                 echo node >> "$FIXTURE_DIR/probe-attempts"
             fi
